@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PikA - Pickleball Airways</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=9" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
+</head>
+<body>
+
+<!-- ═══════════════ HEADER ═══════════════ -->
+<header class="app-header">
+  <div class="header-logo">
+    <i class="fas fa-plane-departure"></i>
+    <span>PikA</span>
+  </div>
+
+  <div class="header-nav">
+    <button class="icon-btn" id="btnPrevPeriod" title="Kỳ trước"><i class="fas fa-chevron-left"></i></button>
+    <input type="date" id="currentDate" />
+    <button class="icon-btn" id="btnNextPeriod" title="Kỳ sau"><i class="fas fa-chevron-right"></i></button>
+    <span class="date-label" id="dateLabel"></span>
+  </div>
+
+  <div class="header-view-toggle">
+    <div class="tz-toggle view-toggle">
+      <button class="tz-btn active" id="btnViewDay"   data-view="day">Ngày</button>
+      <button class="tz-btn"        id="btnViewWeek"  data-view="week">Tuần</button>
+      <button class="tz-btn"        id="btnViewMonth" data-view="month">Tháng</button>
+    </div>
+  </div>
+
+  <div class="header-actions">
+    <div class="tz-toggle">
+      <button class="tz-btn active" id="btnLCT">LCT</button>
+      <button class="tz-btn" id="btnUTC">UTC</button>
+    </div>
+    <button class="icon-btn" id="btnUndo" title="Undo (Ctrl+Z)" disabled><i class="fas fa-undo"></i></button>
+    <button class="icon-btn" id="btnRedo" title="Redo (Ctrl+Y)" disabled><i class="fas fa-redo"></i></button>
+    <button class="icon-btn" id="btnLogout" title="Đăng xuất"><i class="fas fa-sign-out-alt"></i></button>
+  </div>
+</header>
+
+<!-- ═══════════════ TOOLBAR ═══════════════ -->
+<div class="toolbar">
+  <button class="btn btn-primary" id="btnAddAircraft"><i class="fas fa-plus"></i> Thêm tàu</button>
+  <button class="btn btn-success" id="btnAddSector"><i class="fas fa-plus-circle"></i> Thêm chặng</button>
+  <div class="separator"></div>
+  <button class="btn btn-secondary" id="btnRules"><i class="fas fa-cog"></i> Quy tắc</button>
+  <div class="separator"></div>
+  <button class="btn btn-secondary" id="btnReport"><i class="fas fa-chart-bar"></i> Báo cáo</button>
+  <button class="btn btn-secondary" id="btnExport"><i class="fas fa-file-export"></i> Xuất TT</button>
+  <button class="btn btn-secondary" id="btnImportFile"><i class="fas fa-file-import"></i> Import</button>
+  <button class="btn btn-secondary" id="btnSaveFile"><i class="fas fa-save"></i> Lưu lịch</button>
+  <div class="separator"></div>
+  <div class="season-badge" id="seasonBadge" title="Mùa bay hiện tại">
+    <i class="fas fa-sun" id="seasonIcon"></i>
+    <span id="seasonLabel">--</span>
+  </div>
+  <button class="btn btn-secondary" id="btnAuditLog" title="Lịch sử thay đổi"><i class="fas fa-history"></i> Lịch sử</button>
+  <button class="btn btn-warning admin-only" id="btnAddMaintenance" title="Thêm bảo dưỡng tàu"><i class="fas fa-wrench"></i> Bảo dưỡng</button>
+</div>
+
+<!-- ═══════════════ MAIN LAYOUT ═══════════════ -->
+<div class="app-body">
+
+  <!-- Gantt chart area (Day view) -->
+  <div class="gantt-wrapper" id="ganttWrapper">
+    <!-- Ruler + rows rendered by JS -->
+    <div class="gantt-label-col" id="ganttLabelCol"></div>
+    <div class="gantt-scroll-area" id="ganttScrollArea">
+      <div class="gantt-ruler" id="ganttRuler"></div>
+      <div class="gantt-rows" id="ganttRows"></div>
+    </div>
+  </div>
+
+  <!-- Week view panel -->
+  <div class="week-view hidden" id="weekView">
+    <div class="week-grid" id="weekGrid"></div>
+  </div>
+
+  <!-- Month view panel -->
+  <div class="month-view hidden" id="monthView">
+    <div class="month-grid" id="monthGrid"></div>
+  </div>
+
+  <!-- Warning panel -->
+  <aside class="warning-panel" id="warningPanel">
+    <div class="warning-header">
+      <i class="fas fa-exclamation-triangle"></i>
+      <span>Cảnh báo</span>
+      <span class="badge" id="warningBadge">0</span>
+    </div>
+    <div class="warning-list" id="warningList">
+      <div class="no-warnings">Không có cảnh báo</div>
+    </div>
+  </aside>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     MODALS
+═══════════════════════════════════════════════════════════════ -->
+
+<!-- Sector Edit Modal -->
+<div class="modal-overlay hidden" id="sectorModalOverlay">
+  <div class="modal" id="sectorModal">
+    <div class="modal-header">
+      <h2 id="sectorModalTitle">Thêm chặng bay</h2>
+      <button class="close-btn" data-close="sectorModalOverlay"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="sectorId" />
+      <div class="form-row">
+        <div class="form-group">
+          <label>Tàu bay *</label>
+          <select id="sectorAircraftId"></select>
+        </div>
+        <div class="form-group">
+          <label>Ngày bay *</label>
+          <input type="date" id="sectorDate" />
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Điểm đi *</label>
+          <input type="text" id="sectorOrigin" maxlength="3" placeholder="SGN" class="uppercase" />
+        </div>
+        <div class="form-group">
+          <label>Điểm đến *</label>
+          <input type="text" id="sectorDest" maxlength="3" placeholder="HAN" class="uppercase" />
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group" style="flex:none;">
+          <label>Nhập giờ theo</label>
+          <div class="tz-toggle modal-tz-toggle">
+            <button class="tz-btn active" id="sectorTZUtc">UTC</button>
+            <button class="tz-btn" id="sectorTZLct">LCT (+7)</button>
+          </div>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label id="sectorDepLabel">Giờ cất cánh (UTC) *</label>
+          <input type="time" id="sectorDep" />
+          <small id="sectorDepHint" class="hint convert-hint"></small>
+        </div>
+        <div class="form-group">
+          <label id="sectorArrLabel">Giờ hạ cánh (UTC)</label>
+          <input type="time" id="sectorArr" />
+          <small id="sectorArrHint" class="hint convert-hint"></small>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Block time (phút)</label>
+          <input type="number" id="sectorBlockTime" min="1" max="900" placeholder="Auto" />
+        </div>
+        <div class="form-group">
+          <label>Số hiệu chuyến</label>
+          <input type="text" id="sectorFlightNum" placeholder="VN123" class="uppercase" />
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Màu chặng</label>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <input type="color" id="sectorColor" value="#2563eb" style="width:36px;height:26px;padding:2px;border-radius:4px;cursor:pointer;" />
+            <button type="button" class="btn btn-secondary btn-sm" id="btnResetSectorColor" style="font-size:11px;">Dùng màu tàu</button>
+          </div>
+        </div>
+      </div>
+      <div id="sectorWarningBox" class="inline-warning hidden"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="sectorModalOverlay">Huỷ</button>
+      <button class="btn btn-primary" id="btnSaveSector">Lưu</button>
+    </div>
+  </div>
+</div>
+
+<!-- Aircraft Modal -->
+<div class="modal-overlay hidden" id="aircraftModalOverlay">
+  <div class="modal modal-sm" id="aircraftModal">
+    <div class="modal-header">
+      <h2 id="aircraftModalTitle">Thêm tàu bay</h2>
+      <button class="close-btn" data-close="aircraftModalOverlay"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="aircraftId" />
+      <div class="form-group">
+        <label>Số hiệu tàu (Reg) *</label>
+        <input type="text" id="aircraftReg" placeholder="VN-A123" class="uppercase" />
+      </div>
+      <div class="form-group">
+        <label>AC Type</label>
+        <input type="text" id="aircraftType" placeholder="A320, B737-800, ATR72..." />
+      </div>
+      <div class="form-group">
+        <label>Tên / Ghi chú</label>
+        <input type="text" id="aircraftName" placeholder="Ghi chú thêm" />
+      </div>
+      <div class="form-group">
+        <label>Màu tàu</label>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <input type="color" id="aircraftColor" value="#2563eb" style="width:40px;height:28px;padding:2px;border-radius:4px;cursor:pointer;" />
+          <button type="button" class="btn btn-secondary btn-sm" id="btnResetAircraftColor" style="font-size:11px;">Mặc định</button>
+          <span style="font-size:11px;color:var(--text-muted)">Áp dụng cho tất cả chặng của tàu này</span>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="aircraftModalOverlay">Huỷ</button>
+      <button class="btn btn-primary" id="btnSaveAircraft">Lưu</button>
+    </div>
+  </div>
+</div>
+
+<!-- Rules Modal -->
+<div class="modal-overlay hidden" id="rulesModalOverlay">
+  <div class="modal modal-lg" id="rulesModal">
+    <div class="modal-header">
+      <h2>Quy tắc & Cài đặt</h2>
+      <button class="close-btn" data-close="rulesModalOverlay"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="tabTAT">TAT Rules</button>
+        <button class="tab-btn" data-tab="tabBlockTime">Block Time</button>
+        <button class="tab-btn" data-tab="tabAirports">Sân bay</button>
+        <button class="tab-btn" data-tab="tabRegistration">Registration</button>
+        <button class="tab-btn admin-only" data-tab="tabUsers">Người dùng</button>
+        <button class="tab-btn admin-only" data-tab="tabSeasons">Mùa bay</button>
+      </div>
+
+      <!-- TAT tab -->
+      <div class="tab-content active" id="tabTAT">
+        <!-- Mass TAT defaults -->
+        <div class="mass-tat-box" id="massTATBox">
+          <div class="mass-tat-title"><i class="fas fa-globe"></i> Rule mặc định (áp dụng cho cảng chưa được cài đặt riêng)</div>
+          <div class="mass-tat-fields">
+            <label>Nội địa:
+              <input type="time" id="massTATDomestic" value="00:40" />
+            </label>
+            <label>Quốc tế:
+              <input type="time" id="massTATIntl" value="01:00" />
+            </label>
+            <button class="btn btn-primary btn-sm admin-only" id="btnSaveMassTAT">Lưu mặc định</button>
+          </div>
+        </div>
+        <div class="table-toolbar">
+          <button class="btn btn-success btn-sm admin-only" id="btnAddTAT"><i class="fas fa-plus"></i> Thêm</button>
+          <button class="btn btn-secondary btn-sm" id="btnExportTAT"><i class="fas fa-file-excel"></i> Xuất Excel</button>
+          <button class="btn btn-secondary btn-sm admin-only" id="btnImportTAT"><i class="fas fa-file-upload"></i> Nhập Excel</button>
+          <input type="file" id="tatFileInput" accept=".xlsx,.xls" style="display:none" />
+        </div>
+        <table class="data-table" id="tatTable">
+          <thead><tr><th>Sân bay</th><th>Nội địa/Quốc tế</th><th>TAT tối thiểu</th><th class="admin-only"></th></tr></thead>
+          <tbody id="tatTableBody"></tbody>
+        </table>
+      </div>
+
+      <!-- Block time tab -->
+      <div class="tab-content" id="tabBlockTime">
+        <div class="table-toolbar">
+          <button class="btn btn-success btn-sm admin-only" id="btnAddBT"><i class="fas fa-plus"></i> Thêm</button>
+          <button class="btn btn-secondary btn-sm" id="btnExportBT"><i class="fas fa-file-excel"></i> Xuất Excel</button>
+          <button class="btn btn-secondary btn-sm admin-only" id="btnImportBT"><i class="fas fa-file-upload"></i> Nhập Excel</button>
+          <input type="file" id="btFileInput" accept=".xlsx,.xls" style="display:none" />
+        </div>
+        <table class="data-table" id="btTable">
+          <thead><tr><th>Điểm đi</th><th>Điểm đến</th><th>Block time</th><th>Thập phân</th><th class="admin-only"></th></tr></thead>
+          <tbody id="btTableBody"></tbody>
+        </table>
+      </div>
+
+      <!-- Airports tab (merged from separate modal) -->
+      <div class="tab-content" id="tabAirports">
+        <div class="table-toolbar">
+          <button class="btn btn-success btn-sm admin-only" id="btnAddAirport"><i class="fas fa-plus"></i> Thêm</button>
+        </div>
+        <table class="data-table" id="airportTable">
+          <thead><tr><th>Mã (IATA)</th><th>Tên sân bay</th><th>Múi giờ (UTC+)</th><th>Loại</th><th class="admin-only"></th></tr></thead>
+          <tbody id="airportTableBody"></tbody>
+        </table>
+        <div class="inline-form hidden" id="airportForm">
+          <input type="hidden" id="apCode" />
+          <input type="text" id="apCodeInput" placeholder="SGN" maxlength="3" class="uppercase" style="width:80px" />
+          <input type="text" id="apName" placeholder="Tên sân bay" style="flex:1" />
+          <input type="number" id="apTZ" step="0.5" min="-12" max="14" placeholder="7" style="width:80px" />
+          <select id="apType" style="width:110px">
+            <option value="domestic">Nội địa</option>
+            <option value="international">Quốc tế</option>
+          </select>
+          <button class="btn btn-primary btn-sm" id="btnSaveAirport">Lưu</button>
+          <button class="btn btn-secondary btn-sm" id="btnCancelAirport">Huỷ</button>
+        </div>
+      </div>
+
+      <!-- Registration tab -->
+      <div class="tab-content" id="tabRegistration">
+        <div class="table-toolbar">
+          <button class="btn btn-success btn-sm admin-only" id="btnAddReg"><i class="fas fa-plus"></i> Thêm</button>
+        </div>
+        <table class="data-table" id="regTable">
+          <thead><tr><th>Số đăng bạ</th><th>Mẫu máy bay</th><th>Số ghế</th><th class="admin-only"></th></tr></thead>
+          <tbody id="regTableBody"></tbody>
+        </table>
+        <div class="inline-form hidden" id="regForm">
+          <input type="hidden" id="regId" />
+          <input type="text" id="regNumber" placeholder="VN-A123" class="uppercase" style="width:120px" />
+          <input type="text" id="regModel" placeholder="Airbus 321" style="flex:1" />
+          <input type="number" id="regSeats" min="1" max="600" placeholder="200" style="width:80px" />
+          <button class="btn btn-primary btn-sm" id="btnSaveReg">Lưu</button>
+          <button class="btn btn-secondary btn-sm" id="btnCancelReg">Huỷ</button>
+        </div>
+      </div>
+
+      <!-- Users tab (admin only) -->
+      <div class="tab-content" id="tabUsers">
+        <div class="table-toolbar">
+          <button class="btn btn-success btn-sm" id="btnAddUser"><i class="fas fa-plus"></i> Thêm tài khoản</button>
+        </div>
+        <table class="data-table" id="userTable">
+          <thead><tr><th>Tên đăng nhập</th><th>Tên hiển thị</th><th>Quyền</th><th></th></tr></thead>
+          <tbody id="userTableBody"></tbody>
+        </table>
+      </div>
+
+      <!-- Seasons tab (admin only) -->
+      <div class="tab-content" id="tabSeasons">
+        <div class="table-toolbar">
+          <button class="btn btn-success btn-sm" id="btnAddSeason"><i class="fas fa-plus"></i> Thêm mùa</button>
+          <button class="btn btn-secondary btn-sm" id="btnLoadDefaultSeasons"><i class="fas fa-calendar-alt"></i> Tải mùa IATA</button>
+        </div>
+        <table class="data-table" id="seasonTable">
+          <thead><tr><th>Tên mùa</th><th>Từ ngày</th><th>Đến ngày</th><th>Loại</th><th></th></tr></thead>
+          <tbody id="seasonTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Export Timetable Modal -->
+<div class="modal-overlay hidden" id="exportModalOverlay">
+  <div class="modal modal-lg" id="exportModal">
+    <div class="modal-header">
+      <h2>Xuất Time Table</h2>
+      <button class="close-btn" data-close="exportModalOverlay"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Từ ngày</label>
+          <input type="date" id="expStart" />
+        </div>
+        <div class="form-group">
+          <label>Đến ngày</label>
+          <input type="date" id="expEnd" />
+        </div>
+        <div class="form-group">
+          <label>Loại</label>
+          <select id="expMode">
+            <option value="daily">Daily (từng ngày)</option>
+            <option value="group">Group (gộp theo giờ)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Múi giờ</label>
+          <select id="expTZ">
+            <option value="LCT">LCT (địa phương)</option>
+            <option value="UTC">UTC</option>
+          </select>
+        </div>
+      </div>
+      <button class="btn btn-primary" id="btnRunExport"><i class="fas fa-search"></i> Xem</button>
+      <button class="btn btn-secondary" id="btnDownloadTT"><i class="fas fa-download"></i> Tải JSON</button>
+      <div class="export-result" id="exportResult"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Report Modal -->
+<div class="modal-overlay hidden" id="reportModalOverlay">
+  <div class="modal modal-lg" id="reportModal">
+    <div class="modal-header">
+      <h2>Báo cáo Block Hours</h2>
+      <button class="close-btn" data-close="reportModalOverlay"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Từ ngày</label>
+          <input type="date" id="rptStart" />
+        </div>
+        <div class="form-group">
+          <label>Đến ngày</label>
+          <input type="date" id="rptEnd" />
+        </div>
+        <div class="form-group">
+          <label>Sắp xếp theo</label>
+          <select id="rptSortBy">
+            <option value="aircraft">Line tàu</option>
+            <option value="route">Đường bay</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Múi giờ</label>
+          <select id="rptTZ">
+            <option value="LCT">LCT</option>
+            <option value="UTC">UTC</option>
+          </select>
+        </div>
+      </div>
+      <button class="btn btn-primary" id="btnRunReport"><i class="fas fa-search"></i> Xem</button>
+      <button class="btn btn-secondary" id="btnDownloadReport"><i class="fas fa-download"></i> Tải JSON</button>
+      <div class="export-result" id="reportResult"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Audit Log Modal -->
+<div class="modal-overlay hidden" id="auditModalOverlay">
+  <div class="modal modal-lg" id="auditModal">
+    <div class="modal-header">
+      <h2><i class="fas fa-history"></i> Lịch sử thay đổi</h2>
+      <button class="close-btn" data-close="auditModalOverlay"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="table-toolbar" style="margin-bottom:8px;">
+        <select id="auditFilterEntity" style="background:var(--bg-surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;">
+          <option value="">-- Tất cả đối tượng --</option>
+          <option value="sector">Chặng bay</option>
+          <option value="maintenance">Bảo dưỡng</option>
+        </select>
+        <button class="btn btn-secondary btn-sm" id="btnRefreshAudit"><i class="fas fa-sync-alt"></i> Tải lại</button>
+      </div>
+      <div style="overflow-x:auto;max-height:480px;overflow-y:auto;">
+        <table class="data-table" id="auditTable">
+          <thead><tr><th>Thời gian</th><th>Người dùng</th><th>Hành động</th><th>Đối tượng</th><th>Chi tiết</th></tr></thead>
+          <tbody id="auditTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Maintenance Block Modal -->
+<div class="modal-overlay hidden" id="maintenanceModalOverlay">
+  <div class="modal modal-sm" id="maintenanceModal">
+    <div class="modal-header">
+      <h2 id="maintenanceModalTitle"><i class="fas fa-wrench"></i> Thêm bảo dưỡng</h2>
+      <button class="close-btn" data-close="maintenanceModalOverlay"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="mxId" />
+      <div class="form-group">
+        <label>Tàu bay <span class="required">*</span></label>
+        <select id="mxAircraft"></select>
+      </div>
+      <div class="form-group">
+        <label>Nhãn / Mô tả</label>
+        <input type="text" id="mxLabel" placeholder="C-Check, AOG, Scheduled Maintenance..." />
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Từ ngày <span class="required">*</span></label>
+          <input type="date" id="mxStartDate" />
+        </div>
+        <div class="form-group">
+          <label>Đến ngày <span class="required">*</span></label>
+          <input type="date" id="mxEndDate" />
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Màu hiển thị</label>
+        <input type="color" id="mxColor" value="#f59e0b" style="width:48px;height:30px;padding:2px;border-radius:4px;cursor:pointer;" />
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-danger btn-sm hidden" id="btnDeleteMaintenance"><i class="fas fa-trash"></i> Xoá</button>
+      <button class="btn btn-secondary" data-close="maintenanceModalOverlay">Huỷ</button>
+      <button class="btn btn-primary" id="btnSaveMaintenance">Lưu</button>
+    </div>
+  </div>
+</div>
+
+<!-- Season Form Modal -->
+<div class="modal-overlay hidden" id="seasonFormModal">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2 id="seasonFormTitle">Thêm mùa bay</h2>
+      <button class="close-btn" data-close="seasonFormModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="seasonId" />
+      <div class="form-group">
+        <label>Tên mùa <span class="required">*</span></label>
+        <input type="text" id="seasonName" placeholder="vd: Summer 2026" />
+      </div>
+      <div class="form-group">
+        <label>Loại <span class="required">*</span></label>
+        <select id="seasonType">
+          <option value="summer">Hè (Summer)</option>
+          <option value="winter">Đông (Winter)</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Từ ngày <span class="required">*</span></label>
+          <input type="date" id="seasonStart" />
+        </div>
+        <div class="form-group">
+          <label>Đến ngày <span class="required">*</span></label>
+          <input type="date" id="seasonEnd" />
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="seasonFormModal">Huỷ</button>
+      <button class="btn btn-primary" id="btnSaveSeason">Lưu</button>
+    </div>
+  </div>
+</div>
+
+<!-- Context menu for sector right-click -->
+<div class="context-menu hidden" id="contextMenu">
+  <ul>
+    <li id="cmEdit"><i class="fas fa-edit"></i> Chỉnh sửa</li>
+    <li id="cmCopy"><i class="fas fa-copy"></i> Copy chặng</li>
+    <li class="cm-separator"></li>
+    <li id="cmCancel"><i class="fas fa-ban"></i> Huỷ chuyến</li>
+    <li id="cmRestore" class="hidden"><i class="fas fa-undo-alt"></i> Khôi phục</li>
+    <li id="cmDelete" class="danger"><i class="fas fa-trash"></i> Xoá</li>
+  </ul>
+</div>
+
+<!-- Hidden file input for import -->
+<input type="file" id="importFileInput" accept=".json" class="hidden" />
+
+<!-- Swap Aircraft Lines Modal -->
+<div class="modal-overlay hidden" id="swapAircraftModal">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2>Hoán đổi tuyến bay</h2>
+      <button class="close-btn" data-close="swapAircraftModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>Tàu A</label>
+        <input type="text" id="swapAcAName" readonly class="input-readonly" />
+        <input type="hidden" id="swapAcAId" />
+      </div>
+      <div class="form-group">
+        <label>Hoán đổi với tàu <span class="required">*</span></label>
+        <select id="swapAcBId"></select>
+      </div>
+      <div class="form-group">
+        <label>Phạm vi ngày</label>
+        <select id="swapDateScope">
+          <option value="day">Chỉ ngày đang xem</option>
+          <option value="all">Tất cả các ngày</option>
+        </select>
+      </div>
+      <p class="hint-text" id="swapHintText"></p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="swapAircraftModal">Huỷ</button>
+      <button class="btn btn-warning" id="btnConfirmSwap">
+        <i class="fas fa-exchange-alt"></i> Hoán đổi
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Aircraft label right-click context menu -->
+<div class="context-menu hidden" id="acContextMenu">
+  <ul>
+    <li id="acCmSwap"><i class="fas fa-exchange-alt"></i> Hoán đổi tuyến...</li>
+    <li id="acCmCopy"><i class="fas fa-copy"></i> Copy cả line</li>
+    <li id="acCmEdit"><i class="fas fa-edit"></i> Chỉnh sửa tàu bay</li>
+  </ul>
+</div>
+
+<!-- TAT Form Modal -->
+<div class="modal-overlay hidden" id="tatFormModal">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2 id="tatFormTitle">Thêm TAT Rule</h2>
+      <button class="close-btn" data-close="tatFormModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="tatId" />
+      <div class="form-group">
+        <label>Sân bay <span class="required">*</span></label>
+        <input type="text" id="tatStation" placeholder="SGN" maxlength="3" class="uppercase" />
+      </div>
+      <div class="form-group">
+        <label>Phân loại <span class="required">*</span></label>
+        <select id="tatIsDomestic">
+          <option value="">-- Chọn loại --</option>
+          <option value="true">Nội địa</option>
+          <option value="false">Quốc tế</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>TAT tối thiểu <span class="required">*</span></label>
+        <input type="time" id="tatTime" placeholder="00:40" />
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="tatFormModal">Huỷ</button>
+      <button class="btn btn-primary" id="btnSaveTAT">Lưu</button>
+    </div>
+  </div>
+</div>
+
+<!-- Block Time Form Modal -->
+<div class="modal-overlay hidden" id="btFormModal">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2 id="btFormTitle">Thêm Block Time Rule</h2>
+      <button class="close-btn" data-close="btFormModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="btId" />
+      <div class="form-group">
+        <label>Điểm đi <span class="required">*</span></label>
+        <input type="text" id="btOrigin" placeholder="SGN" maxlength="3" class="uppercase" />
+      </div>
+      <div class="form-group">
+        <label>Điểm đến <span class="required">*</span></label>
+        <input type="text" id="btDest" placeholder="HAN" maxlength="3" class="uppercase" />
+      </div>
+      <div class="form-group">
+        <label>Block time <span class="required">*</span></label>
+        <input type="time" id="btTime" placeholder="01:30" />
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="btFormModal">Huỷ</button>
+      <button class="btn btn-primary" id="btnSaveBT">Lưu</button>
+    </div>
+  </div>
+</div>
+
+<!-- User Form Modal -->
+<div class="modal-overlay hidden" id="userFormModal">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2 id="userFormTitle">Thêm tài khoản</h2>
+      <button class="close-btn" data-close="userFormModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="userId" />
+      <div class="form-group">
+        <label>Tên đăng nhập <span class="required">*</span></label>
+        <input type="text" id="userUsername" placeholder="vd: nguyen.van.a" autocomplete="off" />
+      </div>
+      <div class="form-group">
+        <label>Mật khẩu <span class="required">*</span></label>
+        <input type="password" id="userPassword" placeholder="Mật khẩu" autocomplete="new-password" />
+      </div>
+      <div class="form-group">
+        <label>Tên hiển thị</label>
+        <input type="text" id="userDisplayName" placeholder="Nguyễn Văn A" />
+      </div>
+      <div class="form-group">
+        <label>Quyền <span class="required">*</span></label>
+        <select id="userRole">
+          <option value="viewer">Xem (Viewer)</option>
+          <option value="admin">Quản trị (Admin)</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="userFormModal">Huỷ</button>
+      <button class="btn btn-primary" id="btnSaveUser">Lưu</button>
+    </div>
+  </div>
+</div>
+
+<!-- Footer -->
+<footer class="app-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <i class="fas fa-shield-alt"></i>
+      <span>Thuộc sở hữu <strong>Nguyễn Việt Hoàng</strong></span>
+    </div>
+    <div class="footer-links">
+      <a href="mailto:mikehvnguyen@gmail.com"><i class="fas fa-envelope"></i> mikehvnguyen@gmail.com</a>
+      <a href="tel:0909301994"><i class="fas fa-phone"></i> 0909 301 994</a>
+    </div>
+  </div>
+</footer>
+
+<!-- Paste Modal -->
+<div class="modal-overlay hidden" id="pasteModalOverlay">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2><i class="fas fa-paste"></i> Paste chặng bay</h2>
+      <button class="close-btn" data-close="pasteModalOverlay"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <p class="hint-text" id="pasteSummary"></p>
+      <div class="paste-preview" id="pastePreviewList"></div>
+      <div class="form-group" style="margin-top:12px;">
+        <label>Ngày đích <span class="required">*</span></label>
+        <input type="date" id="pasteDate" />
+      </div>
+      <div class="form-group">
+        <label>Tàu bay đích <span class="required">*</span></label>
+        <select id="pasteAircraftId"></select>
+      </div>
+      <div class="form-group hidden" id="pasteReplaceRow">
+        <label class="checkbox-label">
+          <input type="checkbox" id="pasteReplace" />
+          Xóa chặng hiện tại của tàu đích trước khi paste
+        </label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="pasteModalOverlay">Huỷ</button>
+      <button class="btn btn-primary" id="btnConfirmPaste">
+        <i class="fas fa-paste"></i> Paste
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Generic confirm modal (replaces native confirm() to avoid ghost-click bugs) -->
+<div class="modal-overlay hidden" id="confirmModalOverlay">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2 id="confirmModalTitle"><i class="fas fa-question-circle"></i> Xác nhận</h2>
+    </div>
+    <div class="modal-body">
+      <p id="confirmModalMsg" style="line-height:1.6;"></p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" id="btnConfirmModalCancel">Huỷ</button>
+      <button class="btn btn-primary" id="btnConfirmModalOk">Xác nhận</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/api.js?v=9"></script>
+<script src="/static/js/history.js?v=9"></script>
+<script src="/static/js/gantt.js?v=9"></script>
+<script src="/static/js/app.js?v=9"></script>
+</body>
+</html>

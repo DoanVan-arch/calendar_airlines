@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Đăng nhập – PikA</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
+  <style>
+    :root {
+      --bg-dark:    #0d1117;
+      --bg-panel:   #161b22;
+      --bg-surface: #1e2530;
+      --border:     #30363d;
+      --accent:     #2188ff;
+      --accent-hover: #388bff;
+      --danger:     #da3633;
+      --text:       #c9d1d9;
+      --text-muted: #8b949e;
+      --text-bright:#f0f6fc;
+      --font:       'Segoe UI', system-ui, sans-serif;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg-dark);
+      color: var(--text);
+      font-family: var(--font);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* Animated background */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(ellipse at 20% 50%, rgba(33,136,255,0.06) 0%, transparent 60%),
+        radial-gradient(ellipse at 80% 20%, rgba(46,160,67,0.04) 0%, transparent 50%);
+      pointer-events: none;
+    }
+
+    /* Floating planes decoration */
+    .bg-plane {
+      position: fixed;
+      font-size: 24px;
+      color: rgba(33,136,255,0.06);
+      pointer-events: none;
+      animation: floatPlane linear infinite;
+    }
+    .bg-plane:nth-child(1) { top: 15%; left: -80px; animation-duration: 22s; animation-delay: 0s; font-size: 32px; }
+    .bg-plane:nth-child(2) { top: 55%; left: -60px; animation-duration: 28s; animation-delay: 6s; }
+    .bg-plane:nth-child(3) { top: 35%; left: -70px; animation-duration: 18s; animation-delay: 12s; font-size: 18px; }
+
+    @keyframes floatPlane {
+      from { transform: translateX(0) rotate(-5deg); opacity: 0; }
+      10%  { opacity: 1; }
+      90%  { opacity: 1; }
+      to   { transform: translateX(calc(100vw + 150px)) rotate(-5deg); opacity: 0; }
+    }
+
+    .login-card {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      width: 100%;
+      max-width: 400px;
+      padding: 40px 36px;
+      box-shadow: 0 24px 64px rgba(0,0,0,0.6);
+      position: relative;
+      z-index: 10;
+    }
+
+    .login-logo {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      margin-bottom: 32px;
+    }
+
+    .login-logo .logo-icon {
+      width: 52px;
+      height: 52px;
+      background: linear-gradient(135deg, var(--accent), #0f6fd1);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      color: #fff;
+      box-shadow: 0 4px 16px rgba(33,136,255,0.35);
+    }
+
+    .login-logo .logo-text {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .login-logo .logo-title {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text-bright);
+      line-height: 1;
+    }
+
+    .login-logo .logo-sub {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 3px;
+    }
+
+    h2 {
+      font-size: 17px;
+      font-weight: 600;
+      color: var(--text-bright);
+      margin-bottom: 24px;
+      text-align: center;
+    }
+
+    .form-group {
+      margin-bottom: 18px;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+
+    .input-wrap {
+      position: relative;
+    }
+
+    .input-wrap .input-icon {
+      position: absolute;
+      left: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-muted);
+      font-size: 14px;
+      pointer-events: none;
+    }
+
+    .input-wrap input {
+      width: 100%;
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 10px 12px 10px 38px;
+      font-size: 14px;
+      font-family: var(--font);
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+
+    .input-wrap input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(33,136,255,0.15);
+    }
+
+    .input-wrap .toggle-pw {
+      position: absolute;
+      right: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 4px;
+      font-size: 13px;
+      transition: color 0.15s;
+    }
+    .input-wrap .toggle-pw:hover { color: var(--text); }
+
+    .error-msg {
+      display: none;
+      background: rgba(218,54,51,0.1);
+      border: 1px solid var(--danger);
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 12px;
+      color: var(--danger);
+      margin-bottom: 16px;
+      align-items: center;
+      gap: 8px;
+    }
+    .error-msg.show { display: flex; }
+
+    .btn-login {
+      width: 100%;
+      padding: 11px;
+      background: var(--accent);
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      font-family: var(--font);
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .btn-login:hover  { background: var(--accent-hover); }
+    .btn-login:active { transform: scale(0.98); }
+    .btn-login:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    .btn-login .spinner {
+      width: 16px; height: 16px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      display: none;
+    }
+    .btn-login.loading .spinner { display: block; }
+    .btn-login.loading .btn-text { display: none; }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .login-footer {
+      margin-top: 24px;
+      text-align: center;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+
+<i class="fas fa-plane bg-plane"></i>
+<i class="fas fa-plane bg-plane"></i>
+<i class="fas fa-plane bg-plane"></i>
+
+<div class="login-card">
+  <div class="login-logo">
+    <div class="logo-icon"><i class="fas fa-plane-departure"></i></div>
+    <div class="logo-text">
+      <span class="logo-title">PikA</span>
+      <span class="logo-sub">Pickleball Airways</span>
+    </div>
+  </div>
+
+  <h2>Đăng nhập hệ thống</h2>
+
+  <div class="error-msg" id="errorMsg">
+    <i class="fas fa-exclamation-circle"></i>
+    <span id="errorText">Tên đăng nhập hoặc mật khẩu không đúng.</span>
+  </div>
+
+  <form id="loginForm" autocomplete="on">
+    <div class="form-group">
+      <label for="username">Tên đăng nhập</label>
+      <div class="input-wrap">
+        <i class="fas fa-user input-icon"></i>
+        <input type="text" id="username" name="username" placeholder="Nhập tên đăng nhập" autocomplete="username" required />
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="password">Mật khẩu</label>
+      <div class="input-wrap">
+        <i class="fas fa-lock input-icon"></i>
+        <input type="password" id="password" name="password" placeholder="Nhập mật khẩu" autocomplete="current-password" required />
+        <button type="button" class="toggle-pw" id="togglePw" title="Hiện/ẩn mật khẩu">
+          <i class="fas fa-eye" id="togglePwIcon"></i>
+        </button>
+      </div>
+    </div>
+
+    <button type="submit" class="btn-login" id="btnLogin">
+      <div class="spinner"></div>
+      <span class="btn-text"><i class="fas fa-sign-in-alt"></i> Đăng nhập</span>
+    </button>
+  </form>
+
+  <div class="login-footer">
+    PikA &copy; 2026 &mdash; Pickleball Airways
+  </div>
+</div>
+
+<script>
+  const form    = document.getElementById('loginForm');
+  const errBox  = document.getElementById('errorMsg');
+  const errText = document.getElementById('errorText');
+  const btn     = document.getElementById('btnLogin');
+  const togglePw    = document.getElementById('togglePw');
+  const toggleIcon  = document.getElementById('togglePwIcon');
+  const pwInput     = document.getElementById('password');
+
+  // Toggle password visibility
+  togglePw.addEventListener('click', () => {
+    const isText = pwInput.type === 'text';
+    pwInput.type = isText ? 'password' : 'text';
+    toggleIcon.className = isText ? 'fas fa-eye' : 'fas fa-eye-slash';
+  });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    errBox.classList.remove('show');
+    btn.disabled = true;
+    btn.classList.add('loading');
+
+    const username = document.getElementById('username').value.trim();
+    const password = document.getElementById('password').value;
+
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+
+      if (res.ok) {
+        window.location.href = '/';
+      } else {
+        const data = await res.json().catch(() => ({}));
+        errText.textContent = data.detail || 'Tên đăng nhập hoặc mật khẩu không đúng.';
+        errBox.classList.add('show');
+      }
+    } catch (err) {
+      errText.textContent = 'Lỗi kết nối. Vui lòng thử lại.';
+      errBox.classList.add('show');
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove('loading');
+    }
+  });
+</script>
+
+</body>
+</html>
