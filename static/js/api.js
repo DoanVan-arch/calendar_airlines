@@ -74,6 +74,12 @@ const API = (() => {
     // ── Audit log ────────────────────────────────────────────
     getAuditLog: (p)             => req("GET",    `/api/audit/?${new URLSearchParams(p || {})}`),
 
+    // ── Calendar notes ───────────────────────────────────────
+    getNotes: (p)                => req("GET",    `/api/notes/?${new URLSearchParams(p || {})}`),
+    createNote: (d)              => req("POST",   "/api/notes/", d),
+    updateNote: (id, d)          => req("PUT",    `/api/notes/${id}`, d),
+    deleteNote: (id)             => req("DELETE", `/api/notes/${id}`),
+
     // ── Export / Import ──────────────────────────────────────
     exportTimetable: (p)  => req("POST", "/api/export/timetable", p),
     exportReport: (p)     => req("POST", "/api/export/report", p),

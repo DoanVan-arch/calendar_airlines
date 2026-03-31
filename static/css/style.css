@@ -66,6 +66,36 @@ body {
   flex: 1;
 }
 
+.days-shown-ctrl {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 10px;
+  padding: 2px 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.days-shown-ctrl label {
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: default;
+}
+.days-shown-ctrl select {
+  background: transparent;
+  color: var(--text-main);
+  border: none;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+  padding: 2px 4px;
+}
+.days-shown-ctrl select option {
+  background: var(--bg-card);
+  color: var(--text-main);
+}
+
 .date-label {
   color: var(--text-muted);
   font-size: 12px;
@@ -159,6 +189,9 @@ input[type="date"] {
 }
 input[type="date"]:focus { outline: none; border-color: var(--accent); }
 
+/* Force 24h time display — hide AM/PM field in Chromium browsers */
+input[type="time"]::-webkit-datetime-edit-ampm-field { display: none !important; }
+
 /* ── Toolbar ───────────────────────────────────────────────────────────────── */
 .toolbar {
   display: flex;
@@ -192,6 +225,41 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
   position: relative;
 }
 
+/* Zoom controls (floating bottom-right inside gantt wrapper) */
+.gantt-zoom-ctrl {
+  position: absolute;
+  bottom: 12px;
+  right: 20px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 3px 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+}
+.zoom-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+.zoom-btn:hover { color: var(--primary); background: rgba(37,99,235,0.1); }
+.zoom-pct {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-main);
+  min-width: 36px;
+  text-align: center;
+  user-select: none;
+}
+
 .gantt-label-col {
   width: var(--label-w);
   flex-shrink: 0;
@@ -199,11 +267,22 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
   border-right: 1px solid var(--border);
   overflow-y: auto;
   overflow-x: hidden;
-  padding-top: var(--ruler-h);
 }
 
 .gantt-label-col::-webkit-scrollbar { width: 4px; }
 .gantt-label-col::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* TZ label header in label column (replaces in-ruler TZ badges for alignment) */
+.label-col-header {
+  height: var(--ruler-h);
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+  z-index: 11;
+  background: var(--bg-panel);
+  border-bottom: 2px solid var(--border);
+}
 
 .gantt-scroll-area {
   flex: 1;
@@ -241,7 +320,7 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
 
 .ruler-hour {
   flex-shrink: 0;
-  width: 120px; /* 2px * 60 min */
+  /* width is set dynamically by JS based on PX_PER_MIN * 60 */
   border-right: 1px solid var(--border);
   display: flex;
   align-items: center;
@@ -259,21 +338,65 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
 .ruler-hour.ruler-midnight {
   border-left: 2px solid var(--accent) !important;
   color: var(--accent);
+  flex-direction: column;
+  gap: 1px;
 }
-/* TZ badge at end of each ruler row */
+/* Date chip shown at midnight rollover */
+.ruler-date-chip {
+  font-size: 8px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.3px;
+  line-height: 1;
+}
+/* Prominent day chip at day boundary in multi-day ruler */
+.ruler-date-chip.ruler-date-chip-day {
+  font-size: 11px;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 3px;
+  padding: 1px 4px;
+  letter-spacing: 0.5px;
+}
+/* TZ badge — inside label-col-header, stacked vertically */
 .ruler-tz-badge {
-  flex-shrink: 0;
+  flex: 1;
+  min-height: 0;
   padding: 0 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 1px;
+  background: var(--bg-panel);
+  border-right: 2px solid var(--accent);
+  white-space: nowrap;
+}
+.ruler-tz-badge-left {
+  /* alias kept for JS class name compatibility */
+  border-bottom: 1px solid var(--border);
+}
+.ruler-tz-badge-lct.ruler-tz-badge-left {
+  border-bottom: none;
+}
+.ruler-tz-label {
   font-size: 9px;
   font-weight: 700;
   color: var(--accent);
-  display: flex;
-  align-items: center;
-  border-left: 1px solid var(--border);
-  white-space: nowrap;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+.ruler-tz-date {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-bright);
+  letter-spacing: 0.3px;
+}
+.ruler-tz-badge-lct .ruler-tz-label {
+  color: color-mix(in srgb, var(--accent) 80%, #fff 20%);
 }
 .ruler-tz-badge-lct {
-  color: color-mix(in srgb, var(--accent) 80%, #fff 20%);
+  background: color-mix(in srgb, var(--bg-panel) 85%, var(--accent) 15%);
 }
 
 /* Rows */
@@ -309,6 +432,11 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
   font-weight: 700;
   color: var(--accent);
   margin-top: 1px;
+}
+.ac-label .ac-sectors {
+  font-size: 9px;
+  color: var(--text-muted);
+  margin-top: 0;
 }
 
 /* ── Aircraft registration tooltip ─────────────────────────────────────── */
@@ -404,7 +532,7 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
 .gantt-row.drag-over { background: rgba(33, 136, 255, 0.12) !important; border: 1px dashed var(--accent); }
 .gantt-row-cancelled { background: rgba(218, 54, 51, 0.05) !important; }
 
-/* Hour grid lines inside row */
+/* Hour grid lines inside row — set dynamically by JS via inline style on each row */
 .gantt-row::before {
   content: '';
   position: absolute;
@@ -412,9 +540,9 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
   background: repeating-linear-gradient(
     90deg,
     transparent 0,
-    transparent 119px,
-    var(--border) 119px,
-    var(--border) 120px
+    transparent calc(var(--hour-w, 120px) - 1px),
+    var(--border) calc(var(--hour-w, 120px) - 1px),
+    var(--border) var(--hour-w, 120px)
   );
   pointer-events: none;
   opacity: 0.5;
@@ -465,6 +593,8 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
 
 .sector-block.has-warning { border-color: var(--warning) !important; box-shadow: 0 0 6px rgba(227,179,65,0.5); }
 .sector-block.has-error   { border-color: var(--danger)  !important; box-shadow: 0 0 6px rgba(218,54,51,0.5); }
+
+/* Next-day sectors now look identical to day-0 sectors */
 
 .sector-route {
   font-size: 11px;
@@ -587,6 +717,28 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
 }
 .warning-item.error .w-type { color: var(--danger); }
 
+/* Warning day group header (multi-day mode) */
+.warning-day-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 4px 4px;
+  margin-top: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.warning-day-header:first-child { margin-top: 0; }
+.warning-day-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-bright);
+  letter-spacing: 0.3px;
+}
+.warning-day-badge {
+  font-size: 10px;
+  padding: 0 5px;
+  min-width: 18px;
+}
+
 /* ── Modals ────────────────────────────────────────────────────────────────── */
 .modal-overlay {
   position: fixed;
@@ -705,6 +857,30 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
 }
 
 .form-group input.uppercase { text-transform: uppercase; }
+
+/* Prefixed input (e.g. "VU" + number) */
+.input-prefix-wrap {
+  display: flex;
+  align-items: stretch;
+}
+.input-prefix {
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  background: var(--bg-surface2);
+  border: 1px solid var(--border);
+  border-right: none;
+  border-radius: 6px 0 0 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  white-space: nowrap;
+  user-select: none;
+}
+.input-prefix-wrap input {
+  flex: 1;
+  min-width: 0;
+}
 
 .hint { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 
@@ -1065,6 +1241,34 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
 }
 .week-sector-pill:hover { filter: brightness(1.2); }
 
+.week-mx-bar {
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.week-note-chip {
+  border-radius: 4px;
+  padding: 2px 6px;
+  margin-top: 2px;
+  font-size: 9px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.week-note-chip:hover { filter: brightness(1.2); }
+
 .week-cell-empty {
   font-size: 10px;
   color: var(--text-muted);
@@ -1157,6 +1361,67 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
   font-size: 10px;
   color: var(--text-muted);
   padding: 1px 4px;
+}
+
+/* ── Month view: maintenance bars ─────────────────────────────────────────── */
+.month-mx-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0;
+}
+.month-mx-bar {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  line-height: 1.5;
+  color: #fff;
+  transition: filter 0.1s;
+}
+.month-mx-bar:hover { filter: brightness(1.2); }
+
+/* ── Month view: note chips ───────────────────────────────────────────────── */
+.month-note-chip {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  margin: 1px 0;
+  color: #fff;
+  line-height: 1.5;
+  transition: filter 0.1s;
+}
+.month-note-chip:hover { filter: brightness(1.2); }
+
+/* ── Month view: add note button ──────────────────────────────────────────── */
+.month-add-note {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 3px;
+  padding: 1px 4px;
+  cursor: pointer;
+  margin-top: 2px;
+  width: 100%;
+  transition: color 0.1s, border-color 0.1s;
+}
+.month-day:hover .month-add-note {
+  display: flex;
+}
+.month-add-note:hover {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 /* ── App body layout update ─────────────────────────────────────────────────── */
@@ -1504,5 +1769,12 @@ body {
   accent-color: var(--accent);
   cursor: pointer;
   flex-shrink: 0;
+}
+
+.dow-checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-top: 4px;
 }
 

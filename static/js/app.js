@@ -13,6 +13,7 @@ const state = {
   massTAT     : { domestic: 40, international: 60 },
   warnings    : [],
   seasons     : [],             // Season objects from API
+  registrations: [],            // Registration objects from API
   maintenance : [],             // MaintenanceBlock objects
   currentSeason: null,          // currently active Season or null
   lastExportData : null,
@@ -77,6 +78,44 @@ function downloadJSON(data, filename) {
   URL.revokeObjectURL(url);
 }
 
+function downloadExcel(data, filename) {
+  if (typeof XLSX === "undefined") { alert("Thư viện XLSX chưa tải xong."); return; }
+  const wb = XLSX.utils.book_new();
+  let rows;
+  if (data.mode === "daily") {
+    rows = data.rows.map(r => ({
+      "Ngày":        r.flight_date,
+      "Tàu":         r.aircraft_reg,
+      "Điểm đi":    r.origin,
+      "Điểm đến":   r.destination,
+      [`Cất (${data.timezone})`]:  r.dep_display,
+      [`Hạ (${data.timezone})`]:   r.arr_display,
+      "Block (phút)": r.block_time_minutes,
+      "Chuyến":      r.flight_number || "",
+    }));
+  } else {
+    rows = data.rows.map(r => ({
+      "Điểm đi":    r.origin,
+      "Điểm đến":   r.destination,
+      [`Cất (${data.timezone})`]:  r.dep_display,
+      [`Hạ (${data.timezone})`]:   r.arr_display,
+      "Block (phút)": r.block_time_minutes,
+      "Ngày bay":    r.date_range,
+      "Số CB":       r.flight_count,
+      "Tàu":         r.aircraft.join(", "),
+    }));
+  }
+  const ws = XLSX.utils.json_to_sheet(rows);
+  // Auto-size columns
+  const colWidths = Object.keys(rows[0] || {}).map(k => {
+    const maxLen = Math.max(k.length, ...rows.map(r => String(r[k] || "").length));
+    return { wch: Math.min(maxLen + 2, 30) };
+  });
+  ws["!cols"] = colWidths;
+  XLSX.utils.book_append_sheet(wb, ws, data.mode === "daily" ? "Timetable" : "Grouped");
+  XLSX.writeFile(wb, filename);
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 async function init() {
   try {
@@ -138,13 +177,14 @@ function applyRoleUI() {
 }
 
 async function loadReferenceData() {
-  const [aircraft, airports, btRules, tatRules, massTAT, seasons] = await Promise.all([
+  const [aircraft, airports, btRules, tatRules, massTAT, seasons, registrations] = await Promise.all([
     API.getAircraft(),
     API.getAirports(),
     API.getBlockTimeRules(),
     API.getTATRules(),
     API.getMassTAT().catch(() => ({ domestic: 40, international: 60 })),
     API.getSeasons().catch(() => []),
+    API.getRegistrations().catch(() => []),
   ]);
 
   state.aircraft = aircraft;
@@ -160,28 +200,63 @@ async function loadReferenceData() {
 
   state.massTAT = massTAT;
   state.seasons = seasons;
+  state.registrations = registrations;
   updateSeasonBadge();
 }
 
 async function refreshGantt() {
-  const [sectors, { warnings }, maintenance] = await Promise.all([
-    API.getSectors(state.currentDate).catch(() => []),
-    API.getWarnings(state.currentDate).catch(() => ({ warnings: [] })),
-    API.getMaintenance({ start: state.currentDate, end: state.currentDate }).catch(() => []),
+  // Build date strings for all days shown in the ruler
+  const datesToFetch = [];
+  const baseD = new Date(state.currentDate + "T00:00:00");
+  for (let i = 0; i < DAYS_SHOWN; i++) {
+    const d = new Date(baseD);
+    d.setDate(d.getDate() + i);
+    const y = d.getFullYear(), mo = String(d.getMonth()+1).padStart(2,"0"), dy = String(d.getDate()).padStart(2,"0");
+    datesToFetch.push(`${y}-${mo}-${dy}`);
+  }
+
+  // Fetch sectors for each visible day + warnings for ALL visible days + maintenance
+  const endDate = datesToFetch[datesToFetch.length - 1];
+  const [sectorsByDay, warningsByDay, maintenance] = await Promise.all([
+    Promise.all(datesToFetch.map(d => API.getSectors(d).catch(() => []))),
+    Promise.all(datesToFetch.map(d => API.getWarnings(d).then(r => r.warnings || []).catch(() => []))),
+    API.getMaintenance({ start: state.currentDate, end: endDate }).catch(() => []),
   ]);
 
-  state.sectors    = sectors;
-  state.warnings   = warnings;
+  // Merge and deduplicate warnings across all days (by sector_id + type)
+  const seenWarnings = new Set();
+  const mergedWarnings = [];
+  for (let i = 0; i < warningsByDay.length; i++) {
+    for (const w of warningsByDay[i]) {
+      const key = `${w.type}|${w.sector_id || ""}|${w.next_sector_id || ""}`;
+      if (!seenWarnings.has(key)) {
+        seenWarnings.add(key);
+        mergedWarnings.push({ ...w, _date: datesToFetch[i] });
+      }
+    }
+  }
+
+  // Tag each sector with its _dayOffset
+  const allSectors = [];
+  for (let i = 0; i < datesToFetch.length; i++) {
+    for (const s of sectorsByDay[i]) {
+      allSectors.push({ ...s, _dayOffset: i });
+    }
+  }
+
+  state.sectors    = sectorsByDay[0];   // day-0 sectors for clipboard/paste logic
+  state.allSectors = allSectors;       // all visible sectors (all days) for drag-drop/lookup
+  state.warnings   = mergedWarnings;
   state.maintenance= maintenance;
 
   gantt.render({
-    aircraft    : state.aircraft,
-    sectors     : state.sectors,
-    airports    : state.airports,
-    timezone    : state.timezone,
-    warnings    : state.warnings,
-    maintenance : state.maintenance,
-    currentDate : state.currentDate,
+    aircraft      : state.aircraft,
+    sectors       : allSectors,
+    airports      : state.airports,
+    timezone      : state.timezone,
+    warnings      : state.warnings,
+    maintenance   : state.maintenance,
+    currentDate   : state.currentDate,
   });
 
   renderWarnings();
@@ -198,12 +273,39 @@ function renderWarnings() {
     return;
   }
   list.innerHTML = "";
-  for (const w of state.warnings) {
-    const div = document.createElement("div");
-    div.className = "warning-item" + (w.severity === "error" ? " error" : "");
-    div.innerHTML = `<div class="w-type">${w.type}</div>${w.message}`;
-    div.addEventListener("click", () => highlightSector(w.sector_id));
-    list.appendChild(div);
+
+  if (DAYS_SHOWN > 1) {
+    // Group warnings by date
+    const grouped = {};
+    for (const w of state.warnings) {
+      const d = w._date || "unknown";
+      if (!grouped[d]) grouped[d] = [];
+      grouped[d].push(w);
+    }
+    // Render each day group with a header
+    for (const [date, warnings] of Object.entries(grouped)) {
+      const header = document.createElement("div");
+      header.className = "warning-day-header";
+      header.innerHTML = `<span class="warning-day-label">${date}</span><span class="badge warning-day-badge">${warnings.length}</span>`;
+      list.appendChild(header);
+
+      for (const w of warnings) {
+        const div = document.createElement("div");
+        div.className = "warning-item" + (w.severity === "error" ? " error" : "");
+        div.innerHTML = `<div class="w-type">${w.type}</div>${w.message}`;
+        div.addEventListener("click", () => highlightSector(w.sector_id));
+        list.appendChild(div);
+      }
+    }
+  } else {
+    // Single day — flat list (no headers)
+    for (const w of state.warnings) {
+      const div = document.createElement("div");
+      div.className = "warning-item" + (w.severity === "error" ? " error" : "");
+      div.innerHTML = `<div class="w-type">${w.type}</div>${w.message}`;
+      div.addEventListener("click", () => highlightSector(w.sector_id));
+      list.appendChild(div);
+    }
   }
 }
 
@@ -286,6 +388,8 @@ function openMaintenanceModal(block = null) {
   doc("mxLabel").value     = block ? (block.label || "") : "";
   doc("mxStartDate").value = block ? block.start_date : state.currentDate;
   doc("mxEndDate").value   = block ? (block.end_date || state.currentDate) : state.currentDate;
+  doc("mxStartTime").value = block ? (block.start_time || "") : "";
+  doc("mxEndTime").value   = block ? (block.end_time || "") : "";
   doc("mxColor").value     = block ? (block.color || "#f59e0b") : "#f59e0b";
   if (block) sel.value     = block.aircraft_id;
 
@@ -306,6 +410,8 @@ async function saveMaintenance() {
   const label    = doc("mxLabel").value.trim() || "Maintenance";
   const startDate= doc("mxStartDate").value;
   const endDate  = doc("mxEndDate").value;
+  const startTime= doc("mxStartTime").value || null;
+  const endTime  = doc("mxEndTime").value || null;
   const color    = doc("mxColor").value;
 
   if (!acId || !startDate || !endDate) {
@@ -316,7 +422,7 @@ async function saveMaintenance() {
   }
 
   try {
-    const payload = { aircraft_id: acId, label, start_date: startDate, end_date: endDate, color };
+    const payload = { aircraft_id: acId, label, start_date: startDate, end_date: endDate, start_time: startTime, end_time: endTime, color };
     if (id) await API.updateMaintenance(parseInt(id, 10), payload);
     else    await API.createMaintenance(payload);
     closeModal("maintenanceModalOverlay");
@@ -449,7 +555,11 @@ function navigateDate(delta) {
   if (state.viewMode === "day")   d.setDate(d.getDate() + delta);
   else if (state.viewMode === "week")  d.setDate(d.getDate() + delta * 7);
   else if (state.viewMode === "month") d.setMonth(d.getMonth() + delta);
-  state.currentDate = d.toISOString().slice(0, 10);
+  // Use local date parts to avoid UTC offset shifting the day
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, "0");
+  const dy = String(d.getDate()).padStart(2, "0");
+  state.currentDate = `${y}-${mo}-${dy}`;
   document.getElementById("currentDate").value = state.currentDate;
   updateDateLabel();
   updateSeasonBadge();
@@ -464,6 +574,10 @@ function setViewMode(mode) {
   doc("ganttWrapper").classList.toggle("hidden", mode !== "day");
   doc("weekView").classList.toggle("hidden",  mode !== "week");
   doc("monthView").classList.toggle("hidden", mode !== "month");
+
+  // Days-shown selector only relevant in day view
+  const daysCtrl = doc("daysShownCtrl");
+  if (daysCtrl) daysCtrl.style.display = mode === "day" ? "" : "none";
 
   // Toggle button active state
   ["day", "week", "month"].forEach(m => {
@@ -509,7 +623,27 @@ async function refreshWeekView() {
   const end   = dateToStr(weekDates[6]);
   const today = todayStr();
 
-  const sectors = await API.getSectorsPeriod(start, end);
+  // Fetch sectors, maintenance, and notes for the week
+  const [sectors, maintenance, notes] = await Promise.all([
+    API.getSectorsPeriod(start, end),
+    API.getMaintenance({ start, end }).catch(() => []),
+    API.getNotes({ start, end }).catch(() => []),
+  ]);
+
+  // Index maintenance by aircraft_id
+  const mxByAc = {};
+  for (const mx of maintenance) {
+    if (!mxByAc[mx.aircraft_id]) mxByAc[mx.aircraft_id] = [];
+    mxByAc[mx.aircraft_id].push(mx);
+  }
+
+  // Index notes by date
+  const notesByDate = {};
+  for (const n of notes) {
+    if (!notesByDate[n.note_date]) notesByDate[n.note_date] = [];
+    notesByDate[n.note_date].push(n);
+  }
+
   const grid = doc("weekGrid");
   grid.innerHTML = "";
 
@@ -529,6 +663,22 @@ async function refreshWeekView() {
       <div class="wh-date">${d.getDate()}</div>
       <div style="font-size:10px;color:var(--text-muted)">${d.toLocaleDateString("vi-VN",{month:"short"})}</div>
     `;
+    // Day header notes chips
+    const dayNotes = notesByDate[dateToStr(d)] || [];
+    for (const note of dayNotes) {
+      const chip = document.createElement("div");
+      chip.className = "week-note-chip";
+      chip.style.background = (note.color || "#3b82f6") + "cc";
+      chip.style.borderLeft = `3px solid ${note.color || "#3b82f6"}`;
+      const timePrefix = note.start_time ? `${note.start_time} ` : "";
+      chip.textContent = timePrefix + note.content;
+      chip.title = note.content + (note.start_time ? `\n${note.start_time}–${note.end_time || ""}` : "");
+      chip.addEventListener("click", e => {
+        e.stopPropagation();
+        openNoteModal(note, dateToStr(d));
+      });
+      cell.appendChild(chip);
+    }
     cell.addEventListener("click", () => {
       state.currentDate = dateToStr(d);
       doc("currentDate").value = state.currentDate;
@@ -555,6 +705,24 @@ async function refreshWeekView() {
         doc("currentDate").value = ds;
         setViewMode("day");
       });
+
+      // Maintenance bars for this aircraft on this day
+      const acMx = (mxByAc[ac.id] || []).filter(mx => mx.start_date <= ds && mx.end_date >= ds);
+      for (const mx of acMx) {
+        const bar = document.createElement("div");
+        bar.className = "week-mx-bar";
+        bar.style.background = (mx.color || "#f59e0b") + "33";
+        bar.style.borderLeft = `3px solid ${mx.color || "#f59e0b"}`;
+        bar.textContent = mx.label || "MX";
+        bar.title = `Bảo dưỡng: ${mx.label || "Maintenance"} (${mx.start_date}→${mx.end_date})`;
+        if (state.userRole === "admin") {
+          bar.addEventListener("click", e => {
+            e.stopPropagation();
+            openMaintenanceModal(mx);
+          });
+        }
+        cell.appendChild(bar);
+      }
 
       const daySectors = sectors.filter(s => s.aircraft_id === ac.id && s.flight_date === ds && s.status === "active");
       if (daySectors.length === 0) {
@@ -588,7 +756,7 @@ async function refreshWeekView() {
   updateDateLabel();
 }
 
-// ─── Month view renderer ──────────────────────────────────────────────────────
+// ─── Month view renderer ──────────────────────────────────────────────────
 async function refreshMonthView() {
   const d     = new Date(state.currentDate + "T00:00:00");
   const year  = d.getFullYear();
@@ -604,7 +772,6 @@ async function refreshMonthView() {
   const totalCells = startPad + lastDay.getDate();
   const rows = Math.ceil(totalCells / 7);
 
-  // Fetch sectors for whole month (+padding days)
   const calStart = new Date(firstDay);
   calStart.setDate(calStart.getDate() - startPad);
   const calEnd   = new Date(calStart);
@@ -612,14 +779,26 @@ async function refreshMonthView() {
 
   const startStr = dateToStr(calStart);
   const endStr   = dateToStr(calEnd);
-  const sectors  = await API.getSectorsPeriod(startStr, endStr);
+  const monthStr = `${year}-${String(month+1).padStart(2,"0")}`;
 
-  // Group by date
-  const byDate = {};
-  for (const s of sectors) {
-    if (s.status !== "active") continue;
-    if (!byDate[s.flight_date]) byDate[s.flight_date] = [];
-    byDate[s.flight_date].push(s);
+  // Fetch maintenance blocks + notes for this month range
+  const [maintenance, notes] = await Promise.all([
+    API.getMaintenance({ start: startStr, end: endStr }).catch(() => []),
+    API.getNotes({ month: monthStr }).catch(() => []),
+  ]);
+
+  // Index maintenance by aircraft_id
+  const mxByAc = {};
+  for (const mx of maintenance) {
+    if (!mxByAc[mx.aircraft_id]) mxByAc[mx.aircraft_id] = [];
+    mxByAc[mx.aircraft_id].push(mx);
+  }
+
+  // Index notes by date
+  const notesByDate = {};
+  for (const n of notes) {
+    if (!notesByDate[n.note_date]) notesByDate[n.note_date] = [];
+    notesByDate[n.note_date].push(n);
   }
 
   const grid = doc("monthGrid");
@@ -650,33 +829,56 @@ async function refreshMonthView() {
     numDiv.textContent = cellDate.getDate();
     cell.appendChild(numDiv);
 
-    // Sector pills (max 3, then "+N more")
-    const daySectors = (byDate[ds] || []).sort((a, b) => a.dep_utc.localeCompare(b.dep_utc));
-    const MAX_PILLS = 3;
-    daySectors.slice(0, MAX_PILLS).forEach(s => {
-      const pill = document.createElement("div");
-      pill.className = "month-sector-pill";
-      pill.style.background = routeColorFromSector(s);
-      const depDisp = state.timezone === "LCT"
-        ? applyTZDisplay(s.dep_utc, s.origin)
-        : s.dep_utc;
-      pill.textContent = `${s.origin}→${s.destination} ${depDisp}`;
-      pill.title = `${s.origin}→${s.destination}  ${s.dep_utc}–${s.arr_utc} UTC${s.flight_number ? "  " + s.flight_number : ""}`;
-      pill.addEventListener("click", e => {
-        e.stopPropagation();
-        state.currentDate = ds;
-        doc("currentDate").value = ds;
-        setViewMode("day");
-      });
-      cell.appendChild(pill);
-    });
-
-    if (daySectors.length > MAX_PILLS) {
-      const more = document.createElement("div");
-      more.className = "month-more";
-      more.textContent = `+${daySectors.length - MAX_PILLS} chặng`;
-      cell.appendChild(more);
+    // Maintenance bars: one bar per aircraft that has active maintenance this day
+    const mxBarsDiv = document.createElement("div");
+    mxBarsDiv.className = "month-mx-bars";
+    for (const ac of state.aircraft) {
+      const acMx = (mxByAc[ac.id] || []).filter(mx => mx.start_date <= ds && mx.end_date >= ds);
+      for (const mx of acMx) {
+        const bar = document.createElement("div");
+        bar.className = "month-mx-bar";
+        bar.style.background = (mx.color || "#f59e0b") + "cc";
+        bar.style.borderLeft  = `3px solid ${mx.color || "#f59e0b"}`;
+        bar.title = `${ac.registration}: ${mx.label || "Maintenance"} (${mx.start_date}→${mx.end_date})`;
+        bar.textContent = `${ac.registration} – ${mx.label || "MX"}`;
+        if (state.userRole === "admin") {
+          bar.addEventListener("click", e => {
+            e.stopPropagation();
+            openMaintenanceModal(mx);
+          });
+        }
+        mxBarsDiv.appendChild(bar);
+      }
     }
+    if (mxBarsDiv.children.length > 0) cell.appendChild(mxBarsDiv);
+
+    // Notes chips
+    const dayNotes = notesByDate[ds] || [];
+    for (const note of dayNotes) {
+      const chip = document.createElement("div");
+      chip.className = "month-note-chip";
+      chip.style.background = (note.color || "#3b82f6") + "cc";
+      chip.style.borderLeft  = `3px solid ${note.color || "#3b82f6"}`;
+      const timePrefix = note.start_time ? `${note.start_time} ` : "";
+      chip.textContent = timePrefix + note.content;
+      chip.title = note.content + (note.start_time ? `\n${note.start_time}–${note.end_time || ""}` : "");
+      chip.addEventListener("click", e => {
+        e.stopPropagation();
+        openNoteModal(note, ds);
+      });
+      cell.appendChild(chip);
+    }
+
+    // Add note button (always visible)
+    const addNoteBtn = document.createElement("div");
+    addNoteBtn.className = "month-add-note";
+    addNoteBtn.innerHTML = `<i class="fas fa-plus"></i>`;
+    addNoteBtn.title = "Thêm ghi chú";
+    addNoteBtn.addEventListener("click", e => {
+      e.stopPropagation();
+      openNoteModal(null, ds);
+    });
+    cell.appendChild(addNoteBtn);
 
     cell.addEventListener("click", () => {
       state.currentDate = ds;
@@ -725,9 +927,32 @@ function openSectorModal(sector = null) {
   document.getElementById("sectorDate").value     = sector ? sector.flight_date : state.currentDate;
   document.getElementById("sectorOrigin").value   = sector ? sector.origin  : "";
   document.getElementById("sectorDest").value     = sector ? sector.destination : "";
-  document.getElementById("sectorFlightNum").value= sector ? (sector.flight_number || "") : "";
+  // Pre-fill flight number: strip VU prefix for the number-only field
+  const rawFN = sector ? (sector.flight_number || "") : "";
+  const fnDigits = rawFN.toUpperCase().startsWith("VU") ? rawFN.slice(2) : rawFN;
+  document.getElementById("sectorFlightNum").value = fnDigits;
   document.getElementById("sectorWarningBox").classList.add("hidden");
   document.getElementById("sectorWarningBox").textContent = "";
+
+  // Repeat panel — only available when adding a new sector
+  const repeatMode = document.getElementById("sectorRepeatMode");
+  const repeatPanel = document.getElementById("sectorRepeatPanel");
+  const repeatToggleRow = document.getElementById("sectorRepeatToggleRow");
+  if (sector) {
+    // Editing existing: hide repeat controls entirely
+    repeatToggleRow.classList.add("hidden");
+    repeatPanel.classList.add("hidden");
+    repeatMode.checked = false;
+  } else {
+    // New sector: show toggle, hide panel, pre-fill date range from current date
+    repeatToggleRow.classList.remove("hidden");
+    repeatMode.checked = false;
+    repeatPanel.classList.add("hidden");
+    document.getElementById("sectorDateFrom").value = state.currentDate;
+    document.getElementById("sectorDateTo").value   = state.currentDate;
+    // Reset DOW checkboxes to all checked
+    document.querySelectorAll(".dow-cb").forEach(cb => { cb.checked = true; });
+  }
 
   // Color picker — use sector color, or aircraft color, or default
   const sectorColorEl = doc("sectorColor");
@@ -890,9 +1115,10 @@ async function saveSector() {
   const dest     = doc("sectorDest").value.toUpperCase().trim();
   let   dep      = doc("sectorDep").value;
   let   arr      = doc("sectorArr").value;
-  const fn       = doc("sectorFlightNum").value.toUpperCase().trim() || null;
+  const fnRaw   = doc("sectorFlightNum").value.trim();
+  const fn       = fnRaw ? ("VU" + fnRaw.toUpperCase()) : null;
 
-  if (!acId || !date || !origin || !dest || !dep || !arr) {
+  if (!acId || !origin || !dest || !dep || !arr) {
     alert("Vui l\u00F2ng \u0111i\u1EC1n \u0111\u1EA7y \u0111\u1EE7 th\u00F4ng tin b\u1EAFt bu\u1ED9c."); return;
   }
 
@@ -902,29 +1128,104 @@ async function saveSector() {
     arr = applyTZ(arr, -getDestOffset());
   }
 
-  const payload = { aircraft_id: acId, flight_date: date, origin, destination: dest,
-                    dep_utc: dep, arr_utc: arr, flight_number: fn,
-                    color: doc("sectorColor").dataset.hasColor === "1" ? doc("sectorColor").value : null };
+  const sectorColor = doc("sectorColor").dataset.hasColor === "1" ? doc("sectorColor").value : null;
 
   try {
     if (id) {
-      const prev = state.sectors.find(s => s.id === parseInt(id, 10));
+      // ── Edit existing sector ────────────────────────────────────────
+      if (!date) { alert("Vui lòng chọn ngày bay."); return; }
+      const payload = { aircraft_id: acId, flight_date: date, origin, destination: dest,
+                        dep_utc: dep, arr_utc: arr, flight_number: fn, color: sectorColor };
+      const prev = state.sectors.find(s => s.id === parseInt(id, 10))
+                 || (state.allSectors && state.allSectors.find(s => s.id === parseInt(id, 10)));
       const updated = await API.updateSector(parseInt(id, 10), payload);
       history.push({
         label: `Edit sector ${origin}→${dest}`,
         undo: async () => { await API.updateSector(updated.id, prev); await refreshGantt(); },
         redo: async () => { await API.updateSector(updated.id, payload); await refreshGantt(); },
       });
+      closeModal("sectorModalOverlay");
+      await refreshGantt();
     } else {
-      const created = await API.createSector(payload);
-      history.push({
-        label: `Add sector ${origin}→${dest}`,
-        undo: async () => { await API.deleteSector(created.id); await refreshGantt(); state.aircraft = await API.getAircraft(); },
-        redo: async () => { await API.createSector(payload); await refreshGantt(); },
-      });
+      // ── New sector(s) ───────────────────────────────────────────────
+      const repeatMode = doc("sectorRepeatMode").checked;
+
+      if (repeatMode) {
+        // Date-range + DOW repeat
+        const dateFrom = doc("sectorDateFrom").value;
+        const dateTo   = doc("sectorDateTo").value;
+        if (!dateFrom || !dateTo) { alert("Vui lòng chọn khoảng ngày."); return; }
+        if (dateTo < dateFrom)    { alert("Ngày kết thúc phải sau ngày bắt đầu."); return; }
+
+        const selectedDOWs = new Set(
+          [...document.querySelectorAll(".dow-cb:checked")].map(cb => parseInt(cb.value, 10))
+        );
+        if (selectedDOWs.size === 0) { alert("Chọn ít nhất một ngày trong tuần."); return; }
+
+        // Iterate through date range
+        const createdIds = [];
+        let cur = new Date(dateFrom + "T00:00:00");
+        const end = new Date(dateTo   + "T00:00:00");
+        while (cur <= end) {
+          const dow = cur.getDay();  // 0=Sun, 1=Mon, ..., 6=Sat
+          if (selectedDOWs.has(dow)) {
+            const flightDate = cur.toISOString().slice(0, 10);
+            const payload = { aircraft_id: acId, flight_date: flightDate, origin, destination: dest,
+                              dep_utc: dep, arr_utc: arr, flight_number: fn, color: sectorColor };
+            try {
+              const created = await API.createSector(payload);
+              createdIds.push(created.id);
+            } catch (e) {
+              console.warn(`Skip ${flightDate}:`, e.message);
+            }
+          }
+          cur.setDate(cur.getDate() + 1);
+        }
+
+        if (createdIds.length === 0) {
+          showToast("Không có ngày nào phù hợp trong khoảng đã chọn.", "warn");
+          return;
+        }
+
+        history.push({
+          label: `Add ${createdIds.length} sectors ${origin}→${dest}`,
+          undo: async () => {
+            for (const sid of createdIds) { try { await API.deleteSector(sid); } catch {} }
+            await refreshGantt();
+          },
+          redo: async () => {
+            // best-effort redo
+            let cur2 = new Date(dateFrom + "T00:00:00");
+            const end2 = new Date(dateTo + "T00:00:00");
+            while (cur2 <= end2) {
+              if (selectedDOWs.has(cur2.getDay())) {
+                const fd = cur2.toISOString().slice(0, 10);
+                try { await API.createSector({ aircraft_id: acId, flight_date: fd, origin, destination: dest, dep_utc: dep, arr_utc: arr, flight_number: fn, color: sectorColor }); } catch {}
+              }
+              cur2.setDate(cur2.getDate() + 1);
+            }
+            await refreshGantt();
+          },
+        });
+
+        showToast(`Đã tạo ${createdIds.length} chặng bay ${origin}→${dest}.`, "success");
+        closeModal("sectorModalOverlay");
+        await refreshGantt();
+      } else {
+        // Single sector
+        if (!date) { alert("Vui lòng chọn ngày bay."); return; }
+        const payload = { aircraft_id: acId, flight_date: date, origin, destination: dest,
+                          dep_utc: dep, arr_utc: arr, flight_number: fn, color: sectorColor };
+        const created = await API.createSector(payload);
+        history.push({
+          label: `Add sector ${origin}→${dest}`,
+          undo: async () => { await API.deleteSector(created.id); await refreshGantt(); state.aircraft = await API.getAircraft(); },
+          redo: async () => { await API.createSector(payload); await refreshGantt(); },
+        });
+        closeModal("sectorModalOverlay");
+        await refreshGantt();
+      }
     }
-    closeModal("sectorModalOverlay");
-    await refreshGantt();
   } catch (e) {
     alert("Lỗi: " + e.message);
   }
@@ -933,33 +1234,81 @@ async function saveSector() {
 // ─── Aircraft modal ───────────────────────────────────────────────────────────
 function openAircraftModal(ac = null) {
   doc("aircraftId").value    = ac ? ac.id : "";
-  doc("aircraftReg").value   = ac ? ac.registration : "";
-  doc("aircraftType").value  = ac ? (ac.ac_type || "") : "";
   doc("aircraftName").value  = ac ? (ac.name || "") : "";
   doc("aircraftColor").value = (ac && ac.color) ? ac.color : "#2563eb";
   doc("aircraftColor").dataset.hasColor = (ac && ac.color) ? "1" : "0";
   doc("aircraftModalTitle").textContent = ac ? "Chỉnh sửa tàu bay" : "Thêm tàu bay";
+
+  // Populate registration select dropdown
+  const sel = doc("aircraftRegSelect");
+  sel.innerHTML = '<option value="">TẠM (không liên kết)</option>';
+  for (const r of (state.registrations || [])) {
+    const opt = document.createElement("option");
+    opt.value = r.id;
+    opt.textContent = `${r.registration} — ${r.aircraft_model} (${r.seats} ghế)${r.dw_type ? " [" + r.dw_type + "]" : ""}`;
+    sel.appendChild(opt);
+  }
+  sel.value = (ac && ac.registration_id) ? ac.registration_id : "";
+
+  // Sync type field and free-text reg field based on current selection
+  _syncAircraftModalFromRegSelect(ac);
+
   doc("aircraftModalOverlay").classList.remove("hidden");
+}
+
+/** Sync AC Type and free-text reg field from the current aircraftRegSelect value */
+function _syncAircraftModalFromRegSelect(ac) {
+  const sel = doc("aircraftRegSelect");
+  const regId = sel.value ? parseInt(sel.value, 10) : null;
+  const reg = regId ? (state.registrations || []).find(r => r.id === regId) : null;
+  const typeEl = doc("aircraftType");
+  if (reg) {
+    typeEl.value = reg.aircraft_model || "";
+    typeEl.readOnly = true;
+    typeEl.style.background = "var(--bg-surface2)";
+    typeEl.style.cursor = "default";
+    doc("regFreeTextGroup").style.display = "none";
+    doc("aircraftReg").value = "";
+  } else {
+    // TẠM: show free-text field, pre-fill with existing reg string if editing
+    typeEl.value = (ac && ac.ac_type) ? ac.ac_type : "";
+    typeEl.readOnly = false;
+    typeEl.style.background = "";
+    typeEl.style.cursor = "";
+    doc("regFreeTextGroup").style.display = "";
+    doc("aircraftReg").value = ac ? (ac.registration || "") : "";
+  }
 }
 
 async function saveAircraft() {
   const id   = doc("aircraftId").value;
-  const reg  = doc("aircraftReg").value.toUpperCase().trim();
-  const type = doc("aircraftType").value.trim() || null;
   const nm   = doc("aircraftName").value.trim() || null;
   const color = doc("aircraftColor").dataset.hasColor === "1" ? doc("aircraftColor").value : null;
+  const regSelVal = doc("aircraftRegSelect").value;
+  const registration_id = regSelVal ? parseInt(regSelVal, 10) : null;
 
-  if (!reg) { alert("Vui lòng nhập số hiệu tàu."); return; }
+  // Derive registration string and ac_type from linked Registration, or free-text when TẠM
+  let reg, type;
+  if (registration_id) {
+    const linked = (state.registrations || []).find(r => r.id === registration_id);
+    if (!linked) { alert("Không tìm thấy Registration đã chọn."); return; }
+    reg  = linked.registration;
+    type = linked.aircraft_model || null;
+  } else {
+    reg  = doc("aircraftReg").value.toUpperCase().trim();
+    type = doc("aircraftType").value.trim() || null;
+    if (!reg) { alert("Vui lòng nhập số hiệu tàu hoặc chọn một Registration."); return; }
+  }
 
   try {
     if (id) {
-      await API.updateAircraft(parseInt(id, 10), { registration: reg, ac_type: type, name: nm, color });
+      await API.updateAircraft(parseInt(id, 10), { registration: reg, ac_type: type, name: nm, color, registration_id });
     } else {
-      const created = await API.createAircraft({ registration: reg, ac_type: type, name: nm, color, line_order: state.aircraft.length });
+      const created = await API.createAircraft({ registration: reg, ac_type: type, name: nm, color, line_order: state.aircraft.length, registration_id });
       history.push({
         label: `Add aircraft ${reg}`,
         undo: async () => { await API.deleteAircraft(created.id); state.aircraft = await API.getAircraft(); await refreshGantt(); },
-        redo: async () => { await API.createAircraft({ registration: reg, ac_type: type, name: nm, color }); state.aircraft = await API.getAircraft(); await refreshGantt(); },
+        redo: async () => { await API.createAircraft({ registration: reg, ac_type: type, name: nm, color, registration_id }); state.aircraft = await API.getAircraft(); await refreshGantt(); },
       });
     }
     state.aircraft = await API.getAircraft();
@@ -1021,8 +1370,9 @@ async function handleRowDrop(fromAcId, toAcId) {
   const nameA  = fromAc ? fromAc.registration : fromAcId;
   const nameB  = toAc   ? toAc.registration   : toAcId;
 
-  // Get all sectors of source aircraft on current date
-  const sectorsToMove = state.sectors.filter(s => s.aircraft_id === fromAcId && s.status === "active");
+  // Get all sectors of source aircraft across all visible days
+  const pool = state.allSectors || state.sectors;
+  const sectorsToMove = pool.filter(s => s.aircraft_id === fromAcId && s.status === "active");
   if (sectorsToMove.length === 0) {
     showToast(`${nameA} không có chặng bay nào để di chuyển.`, "warn");
     return;
@@ -1046,7 +1396,8 @@ async function handleSectorDrop(sectorIds, fromAcId, toAcId) {
   const failed = [];
 
   for (const sectorId of ids) {
-    const sector = state.sectors.find(s => s.id === sectorId);
+    const sector = state.sectors.find(s => s.id === sectorId)
+                || (state.allSectors && state.allSectors.find(s => s.id === sectorId));
     if (!sector) continue;
     try {
       await API.updateSector(sectorId, { aircraft_id: toAcId });
@@ -1087,13 +1438,14 @@ async function handleSectorTimeChange(sectorIdOrIds, newDepUtc, newArrUtc, delta
     if (!deltaMin) return;
     const updates = [];
     for (const sectorId of ids) {
-      const sector = state.sectors.find(s => s.id === sectorId);
+      const sector = state.sectors.find(s => s.id === sectorId)
+                  || (state.allSectors && state.allSectors.find(s => s.id === sectorId));
       if (!sector) continue;
       const dep = timeToMin(sector.dep_utc);
       let   arr = timeToMin(sector.arr_utc);
       if (arr <= dep) arr += 1440;
       const bt = arr - dep;
-      const newDep = Math.max(0, Math.min(MINUTES_TOTAL - bt, dep + deltaMin));
+      const newDep = Math.max(0, Math.min(MINUTES_TOTAL() - bt, dep + deltaMin));
       const newArr = newDep + bt;
       updates.push({
         sectorId,
@@ -1129,7 +1481,8 @@ async function handleSectorTimeChange(sectorIdOrIds, newDepUtc, newArrUtc, delta
 
   // Single sector time shift
   const sectorId = sectorIdOrIds;
-  const sector = state.sectors.find(s => s.id === sectorId);
+  const sector = state.sectors.find(s => s.id === sectorId)
+              || (state.allSectors && state.allSectors.find(s => s.id === sectorId));
   if (!sector) return;
   const prevDep = sector.dep_utc;
   const prevArr = sector.arr_utc;
@@ -1197,18 +1550,20 @@ async function renderTATTable() {
 
   // Auto-sync is_domestic from airports for any mismatches (silently, admin only)
   if (isAdmin) {
+    const syncPromises = [];
     for (const r of rules) {
       const ap = state.airports[r.station];
       if (ap) {
         const shouldBeDom = ap.timezone_offset === 7;
         if (r.is_domestic !== shouldBeDom) {
-          // Silently fix the mismatch
-          API.updateTATRule(r.id, { station: r.station, min_tat_minutes: r.min_tat_minutes, is_domestic: shouldBeDom })
-            .catch(() => {});
+          syncPromises.push(
+            API.updateTATRule(r.id, { station: r.station, min_tat_minutes: r.min_tat_minutes, is_domestic: shouldBeDom }).catch(() => {})
+          );
           r.is_domestic = shouldBeDom; // update local copy immediately
         }
       }
     }
+    if (syncPromises.length > 0) await Promise.all(syncPromises);
   }
 
   for (const r of rules) {
@@ -1268,11 +1623,21 @@ function editTAT(id, station, min, isDomestic) {
   doc("tatId").value = id;
   doc("tatStation").value = station;
   doc("tatTime").value = minToTime(min);
-  // isDomestic: true/false/null from DB
+  // Auto-derive from airport if known; otherwise use DB value
   const sel = doc("tatIsDomestic");
-  if (isDomestic === true || isDomestic === "true") sel.value = "true";
-  else if (isDomestic === false || isDomestic === "false") sel.value = "false";
-  else sel.value = "";
+  const ap = state.airports[station];
+  if (ap) {
+    const derived = ap.timezone_offset === 7;
+    sel.value = derived ? "true" : "false";
+    sel.disabled = true;
+    sel.title = "Tự động từ múi giờ sân bay";
+  } else {
+    if (isDomestic === true || isDomestic === "true") sel.value = "true";
+    else if (isDomestic === false || isDomestic === "false") sel.value = "false";
+    else sel.value = "";
+    sel.disabled = false;
+    sel.title = "";
+  }
   doc("tatFormTitle").textContent = "Chỉnh sửa TAT Rule";
   doc("tatFormModal").classList.remove("hidden");
 }
@@ -1395,27 +1760,31 @@ async function importBTExcel(e) {
 // ─── Registration management ──────────────────────────────────────────────────
 async function renderRegTable() {
   const registrations = await API.getRegistrations();
+  state.registrations = registrations;  // keep state in sync for aircraft modal dropdown
   const tbody = doc("regTableBody");
   tbody.innerHTML = "";
   for (const reg of registrations) {
+    const dwLabel = reg.dw_type || "-";
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${reg.registration}</td>
       <td>${reg.aircraft_model}</td>
       <td>${reg.seats}</td>
-      <td class="action-cell">
-        <button class="btn btn-secondary btn-sm" onclick="editReg(${reg.id},'${reg.registration}','${reg.aircraft_model}',${reg.seats})">Sửa</button>
+      <td>${dwLabel}</td>
+      <td class="action-cell admin-only">
+        <button class="btn btn-secondary btn-sm" onclick="editReg(${reg.id},'${reg.registration}','${reg.aircraft_model}',${reg.seats},'${reg.dw_type || ''}')">Sửa</button>
         <button class="btn btn-danger btn-sm" onclick="deleteReg(${reg.id})">Xoá</button>
       </td>`;
     tbody.appendChild(tr);
   }
 }
 
-function editReg(id, registration, model, seats) {
+function editReg(id, registration, model, seats, dw) {
   doc("regId").value = id;
   doc("regNumber").value = registration;
   doc("regModel").value = model;
   doc("regSeats").value = seats;
+  doc("regDW").value = dw || "";
   doc("regForm").classList.remove("hidden");
 }
 
@@ -1431,13 +1800,14 @@ async function saveReg() {
     const registration = doc("regNumber").value.toUpperCase().trim();
     const aircraft_model = doc("regModel").value.trim();
     const seats = parseInt(doc("regSeats").value, 10);
+    const dw_type = doc("regDW").value || null;
     
     if (!registration || !aircraft_model || !seats) {
       alert("Điền đầy đủ thông tin");
       return;
     }
     
-    const data = { registration, aircraft_model, seats };
+    const data = { registration, aircraft_model, seats, dw_type };
     if (id) await API.updateRegistration(parseInt(id, 10), data);
     else await API.createRegistration(data);
     
@@ -1446,6 +1816,7 @@ async function saveReg() {
     doc("regNumber").value = "";
     doc("regModel").value = "";
     doc("regSeats").value = "";
+    doc("regDW").value = "";
     await renderRegTable();
   } catch (err) {
     alert("Lỗi: " + err.message);
@@ -1571,12 +1942,18 @@ async function saveAirport() {
     doc("apCodeInput").disabled = false;
     doc("apCode").value = "";
     state.airports = Object.fromEntries((await API.getAirports()).map(ap => [ap.code, ap]));
-    // Sync TAT rules: update is_domestic for TAT rules matching this airport code
+    // Sync TAT rules: update is_domestic for ALL TAT rules matching this airport code
     const isDom = tz === 7;
-    const tatRule = state.tatRules[code];
-    if (tatRule && tatRule.is_domestic !== isDom) {
-      await API.updateTATRule(tatRule.id, { station: code, min_tat_minutes: tatRule.min_tat_minutes, is_domestic: isDom }).catch(() => {});
+    const allTatRules = await API.getTATRules().catch(() => []);
+    const syncPromises = [];
+    for (const r of allTatRules) {
+      if (r.station === code && r.is_domestic !== isDom) {
+        syncPromises.push(
+          API.updateTATRule(r.id, { station: r.station, min_tat_minutes: r.min_tat_minutes, is_domestic: isDom }).catch(() => {})
+        );
+      }
     }
+    if (syncPromises.length > 0) await Promise.all(syncPromises);
     await Promise.all([renderAirportTable(), renderTATTable()]);
     await refreshGantt();
   } catch (e) { alert("Lỗi: " + e.message); }
@@ -1852,15 +2229,30 @@ function bindContextMenu() {
 
   doc("cmDelete").addEventListener("click", async () => {
     if (!_ctxSector) return;
-    const s = _ctxSector;
-    if (!confirm(`Xoá chặng ${s.origin}→${s.destination}?`)) return;
-    await API.deleteSector(s.id);
+    const selectedIds = gantt.getSelectedSectorIds();
+    const toDelete = (selectedIds.length > 1 && selectedIds.includes(_ctxSector.id))
+      ? state.sectors.filter(s => selectedIds.includes(s.id))
+      : [_ctxSector];
+    const label = toDelete.length > 1
+      ? `${toDelete.length} chặng đã chọn`
+      : `${toDelete[0].origin}→${toDelete[0].destination}`;
+    if (!confirm(`Xoá ${label}?`)) return;
+    const deletedCopy = toDelete.map(s => ({ ...s }));
+    for (const s of toDelete) await API.deleteSector(s.id);
     history.push({
-      label: `Delete sector ${s.origin}→${s.destination}`,
-      undo: async () => { await API.createSector({ aircraft_id: s.aircraft_id, flight_date: s.flight_date,
-        origin: s.origin, destination: s.destination, dep_utc: s.dep_utc, arr_utc: s.arr_utc,
-        flight_number: s.flight_number, status: s.status }); await refreshGantt(); },
-      redo: async () => { await API.deleteSector(s.id); await refreshGantt(); },
+      label: `Delete ${toDelete.length} sector(s)`,
+      undo: async () => {
+        for (const s of deletedCopy) {
+          await API.createSector({ aircraft_id: s.aircraft_id, flight_date: s.flight_date,
+            origin: s.origin, destination: s.destination, dep_utc: s.dep_utc, arr_utc: s.arr_utc,
+            flight_number: s.flight_number, status: s.status });
+        }
+        await refreshGantt();
+      },
+      redo: async () => {
+        for (const s of deletedCopy) await API.deleteSector(s.id);
+        await refreshGantt();
+      },
     });
     await refreshGantt();
   });
@@ -1937,8 +2329,43 @@ function openPasteModal() {
   }
   const { type, sectors, sourceAcId, sourceDate } = state.clipboard;
 
-  // Populate form
+  // Single-date default
   doc("pasteDate").value = state.currentDate;
+  doc("pasteMultiFrom").value = state.currentDate;
+  doc("pasteMultiTo").value   = state.currentDate;
+
+  // Reset multi-mode off
+  doc("pasteMultiMode").checked = false;
+  doc("pasteSingleDateSection").classList.remove("hidden");
+  doc("pasteMultiSection").classList.add("hidden");
+
+  // Wire up multi-mode toggle (remove old listeners by cloning)
+  const multiToggle = doc("pasteMultiMode");
+  const newToggle = multiToggle.cloneNode(true);
+  multiToggle.parentNode.replaceChild(newToggle, multiToggle);
+  newToggle.addEventListener("change", () => {
+    if (newToggle.checked) {
+      doc("pasteSingleDateSection").classList.add("hidden");
+      doc("pasteMultiSection").classList.remove("hidden");
+    } else {
+      doc("pasteSingleDateSection").classList.remove("hidden");
+      doc("pasteMultiSection").classList.add("hidden");
+    }
+    _updatePasteMultiPreview();
+  });
+
+  // Wire range+DOW changes to update preview count
+  ["pasteMultiFrom","pasteMultiTo"].forEach(id => {
+    const el = doc(id);
+    const nel = el.cloneNode(true);
+    el.parentNode.replaceChild(nel, el);
+    nel.addEventListener("change", _updatePasteMultiPreview);
+  });
+  document.querySelectorAll(".paste-dow-cb").forEach(cb => {
+    const nc = cb.cloneNode(true);
+    cb.parentNode.replaceChild(nc, cb);
+    nc.addEventListener("change", _updatePasteMultiPreview);
+  });
 
   // Aircraft select — show all aircraft
   const sel = doc("pasteAircraftId");
@@ -1971,55 +2398,102 @@ function openPasteModal() {
   }
 
   doc("pasteModalOverlay").classList.remove("hidden");
+  _updatePasteMultiPreview();
+}
+
+/** Compute the list of dates that match the multi-date paste settings */
+function _pasteMultiDates() {
+  const from = doc("pasteMultiFrom").value;
+  const to   = doc("pasteMultiTo").value;
+  if (!from || !to || to < from) return [];
+  const selectedDOW = new Set(
+    [...document.querySelectorAll(".paste-dow-cb")]
+      .filter(cb => cb.checked)
+      .map(cb => parseInt(cb.value, 10))
+  );
+  const dates = [];
+  const cur = new Date(from + "T00:00:00");
+  const end = new Date(to + "T00:00:00");
+  while (cur <= end) {
+    if (selectedDOW.has(cur.getDay())) {
+      dates.push(dateToStr(cur));
+    }
+    cur.setDate(cur.getDate() + 1);
+  }
+  return dates;
+}
+
+function _updatePasteMultiPreview() {
+  const preview = doc("pasteMultiPreviewCount");
+  if (!preview) return;
+  const dates = _pasteMultiDates();
+  preview.textContent = dates.length > 0
+    ? `Sẽ paste vào ${dates.length} ngày: ${dates.slice(0, 5).join(", ")}${dates.length > 5 ? "…" : ""}`
+    : "Không có ngày nào phù hợp";
 }
 
 /** Execute the paste operation */
 async function confirmPaste() {
   if (!state.clipboard) return;
   const { type, sectors } = state.clipboard;
-  const targetDate  = doc("pasteDate").value;
   const targetAcId  = parseInt(doc("pasteAircraftId").value, 10);
   const doReplace   = doc("pasteReplace").checked;
+  const isMulti     = doc("pasteMultiMode").checked;
 
-  if (!targetDate || !targetAcId) {
-    alert("Chọn ngày và tàu bay đích"); return;
+  // Determine target date(s)
+  let targetDates;
+  if (isMulti) {
+    targetDates = _pasteMultiDates();
+    if (targetDates.length === 0) {
+      alert("Không có ngày nào phù hợp với điều kiện đã chọn."); return;
+    }
+  } else {
+    const singleDate = doc("pasteDate").value;
+    if (!singleDate) { alert("Chọn ngày đích"); return; }
+    targetDates = [singleDate];
+  }
+
+  if (!targetAcId) {
+    alert("Chọn tàu bay đích"); return;
   }
 
   const created  = [];
   const failed   = [];
   const deleted  = [];
 
-  // If "replace" is checked (only available for type=line), delete existing active sectors first
-  if (type === "line" && doReplace) {
-    const existing = state.sectors.filter(
-      s => s.aircraft_id === targetAcId && s.flight_date === targetDate && s.status === "active"
-    );
-    for (const s of existing) {
-      try {
-        await API.deleteSector(s.id);
-        deleted.push(s);
-      } catch (e) {
-        console.warn("Could not delete sector", s.id, e);
+  for (const targetDate of targetDates) {
+    // If "replace" is checked (only available for type=line), delete existing active sectors first
+    if (type === "line" && doReplace) {
+      const existing = state.sectors.filter(
+        s => s.aircraft_id === targetAcId && s.flight_date === targetDate && s.status === "active"
+      );
+      for (const s of existing) {
+        try {
+          await API.deleteSector(s.id);
+          deleted.push(s);
+        } catch (e) {
+          console.warn("Could not delete sector", s.id, e);
+        }
       }
     }
-  }
 
-  for (const s of sectors) {
-    const payload = {
-      aircraft_id : targetAcId,
-      flight_date : targetDate,
-      origin      : s.origin,
-      destination : s.destination,
-      dep_utc     : s.dep_utc,
-      arr_utc     : s.arr_utc,
-      flight_number: s.flight_number || null,
-      color       : s.color || null,
-    };
-    try {
-      const result = await API.createSector(payload);
-      created.push(result);
-    } catch (e) {
-      failed.push(`${s.origin}→${s.destination}: ${e.message}`);
+    for (const s of sectors) {
+      const payload = {
+        aircraft_id : targetAcId,
+        flight_date : targetDate,
+        origin      : s.origin,
+        destination : s.destination,
+        dep_utc     : s.dep_utc,
+        arr_utc     : s.arr_utc,
+        flight_number: s.flight_number || null,
+        color       : s.color || null,
+      };
+      try {
+        const result = await API.createSector(payload);
+        created.push(result);
+      } catch (e) {
+        failed.push(`${targetDate} ${s.origin}→${s.destination}: ${e.message}`);
+      }
     }
   }
 
@@ -2028,11 +2502,11 @@ async function confirmPaste() {
   if (created.length > 0) {
     const targetAc = state.aircraft.find(a => a.id === targetAcId);
     const deletedCopy = [...deleted];
+    const dateLabel = targetDates.length === 1 ? targetDates[0] : `${targetDates.length} ngày`;
     history.push({
-      label: `Paste ${created.length} chặng vào ${targetAc ? targetAc.registration : targetAcId} (${targetDate})`,
+      label: `Paste ${created.length} chặng vào ${targetAc ? targetAc.registration : targetAcId} (${dateLabel})`,
       undo: async () => {
         for (const c of created) await API.deleteSector(c.id).catch(() => {});
-        // Restore deleted sectors if replace was used
         for (const s of deletedCopy) await API.createSector({
           aircraft_id: s.aircraft_id, flight_date: s.flight_date,
           origin: s.origin, destination: s.destination,
@@ -2043,26 +2517,29 @@ async function confirmPaste() {
       },
       redo: async () => {
         for (const s of deletedCopy) await API.deleteSector(s.id).catch(() => {});
-        for (const s of sectors) await API.createSector({
-          aircraft_id: targetAcId, flight_date: targetDate,
-          origin: s.origin, destination: s.destination,
-          dep_utc: s.dep_utc, arr_utc: s.arr_utc,
-          flight_number: s.flight_number || null, color: s.color || null,
-        }).catch(() => {});
+        for (const date of targetDates) {
+          for (const s of sectors) await API.createSector({
+            aircraft_id: targetAcId, flight_date: date,
+            origin: s.origin, destination: s.destination,
+            dep_utc: s.dep_utc, arr_utc: s.arr_utc,
+            flight_number: s.flight_number || null, color: s.color || null,
+          }).catch(() => {});
+        }
         await refreshGantt();
       },
     });
 
-    // Navigate to the pasted date if different
-    if (targetDate !== state.currentDate) {
-      state.currentDate = targetDate;
-      doc("currentDate").value = targetDate;
+    // Navigate to the first pasted date if different
+    const firstDate = targetDates[0];
+    if (firstDate !== state.currentDate) {
+      state.currentDate = firstDate;
+      doc("currentDate").value = firstDate;
       updateDateLabel();
       updateSeasonBadge();
     }
     await refreshGantt();
     const replaceMsg = deleted.length > 0 ? ` (đã xóa ${deleted.length} chặng cũ)` : "";
-    showToast(`Đã paste ${created.length} chặng bay${replaceMsg}`, "success");
+    showToast(`Đã paste ${created.length} chặng bay vào ${dateLabel}${replaceMsg}`, "success");
   }
 
   if (failed.length > 0) {
@@ -2097,12 +2574,30 @@ function bindAcContextMenu() {
   doc("acCmCopy").addEventListener("click", () => {
     if (_ctxAircraft) copyAircraftLine(_ctxAircraft.id, _ctxAircraft.registration);
   });
+  doc("acCmDelete").addEventListener("click", async () => {
+    if (!_ctxAircraft) return;
+    const ac = _ctxAircraft;
+    const sectorCount = state.sectors.filter(s => s.aircraft_id === ac.id).length;
+    const label = sectorCount > 0
+      ? `${ac.registration} và ${sectorCount} chặng bay sẽ bị xoá vĩnh viễn.`
+      : `${ac.registration}`;
+    if (!confirm(`Xoá tàu bay ${label}?`)) return;
+    try {
+      await API.deleteAircraft(ac.id);
+      state.aircraft = await API.getAircraft();
+      await refreshGantt();
+    } catch (e) {
+      alert("Lỗi xoá tàu bay: " + e.message);
+    }
+  });
 }
 
 function openSwapModal(ac) {
-  // Close any open modal overlays and inline forms first
+  // Close any open modal overlays, inline forms, and context menus first
   document.querySelectorAll(".modal-overlay:not(.hidden)").forEach(m => m.classList.add("hidden"));
   document.querySelectorAll(".inline-form:not(.hidden)").forEach(f => f.classList.add("hidden"));
+  const cm = doc("acContextMenu");
+  if (cm) cm.classList.add("hidden");
 
   doc("swapAcAId").value   = ac.id;
   doc("swapAcAName").value = ac.registration + (ac.ac_type ? ` (${ac.ac_type})` : "");
@@ -2149,7 +2644,7 @@ async function confirmSwap() {
     const result = await API.swapAircraft({ aircraft_a_id: acAId, aircraft_b_id: acBId, date });
     doc("swapAircraftModal").classList.add("hidden");
     await refreshGantt();
-    alert(`Đã hoán đổi: ${result.swapped_a} chuyến của ${result.aircraft_a} ↔ ${result.swapped_b} chuyến của ${result.aircraft_b}`);
+    showToast(`Đã hoán đổi: ${result.swapped_a} chuyến của ${result.aircraft_a} ↔ ${result.swapped_b} chuyến của ${result.aircraft_b}`, "success");
   } catch (err) {
     alert("Lỗi hoán đổi: " + err.message);
   }
@@ -2175,6 +2670,15 @@ function bindUI() {
   doc("btnViewWeek").addEventListener("click",  () => setViewMode("week"));
   doc("btnViewMonth").addEventListener("click", () => setViewMode("month"));
 
+  // Days-shown selector (Gantt day count)
+  const daysSelect = doc("daysShownSelect");
+  if (daysSelect) {
+    daysSelect.addEventListener("change", e => {
+      DAYS_SHOWN = parseInt(e.target.value, 10) || 3;
+      if (state.viewMode === "day") refreshGantt();
+    });
+  }
+
   // Timezone toggle
   doc("btnLCT").addEventListener("click", () => {
     state.timezone = "LCT";
@@ -2192,6 +2696,19 @@ function bindUI() {
   // Undo / Redo
   doc("btnUndo").addEventListener("click", () => history.undo().then(refreshGantt));
   doc("btnRedo").addEventListener("click", () => history.redo().then(refreshGantt));
+
+  // Zoom buttons
+  doc("btnZoomIn").addEventListener("click", () => {
+    PX_PER_MIN = Math.min(8, PX_PER_MIN * 1.3);
+    if (gantt._aircraft) gantt._reRender();
+    gantt._updateZoomIndicator();
+  });
+  doc("btnZoomOut").addEventListener("click", () => {
+    PX_PER_MIN = Math.max(0.3, PX_PER_MIN / 1.3);
+    if (gantt._aircraft) gantt._reRender();
+    gantt._updateZoomIndicator();
+  });
+  doc("btnZoomReset").addEventListener("click", () => gantt.resetZoom());
 
   // Logout
   doc("btnLogout").addEventListener("click", async () => {
@@ -2247,6 +2764,18 @@ function bindUI() {
 
   // Sector modal
   doc("btnSaveSector").addEventListener("click", saveSector);
+  doc("sectorRepeatMode").addEventListener("change", () => {
+    const checked = doc("sectorRepeatMode").checked;
+    doc("sectorRepeatPanel").classList.toggle("hidden", !checked);
+    // When switching to repeat mode, sync dateFrom to current sectorDate value
+    if (checked) {
+      const d = doc("sectorDate").value || state.currentDate;
+      doc("sectorDateFrom").value = d;
+      if (!doc("sectorDateTo").value || doc("sectorDateTo").value < d) {
+        doc("sectorDateTo").value = d;
+      }
+    }
+  });
   doc("sectorColor").addEventListener("input", () => {
     doc("sectorColor").dataset.hasColor = "1";
   });
@@ -2280,6 +2809,7 @@ function bindUI() {
 
   // Aircraft modal
   doc("btnSaveAircraft").addEventListener("click", saveAircraft);
+  doc("aircraftRegSelect").addEventListener("change", () => _syncAircraftModalFromRegSelect(null));
   doc("aircraftColor").addEventListener("input", () => {
     doc("aircraftColor").dataset.hasColor = "1";
   });
@@ -2295,6 +2825,8 @@ function bindUI() {
     doc("tatStation").value = "";
     doc("tatTime").value = "00:40";
     doc("tatIsDomestic").value = "";
+    doc("tatIsDomestic").disabled = false;
+    doc("tatIsDomestic").title = "";
     doc("tatFormTitle").textContent = "Thêm TAT Rule";
     doc("tatFormModal").classList.remove("hidden");
   });
@@ -2303,8 +2835,14 @@ function bindUI() {
   doc("tatStation").addEventListener("input", () => {
     const code = doc("tatStation").value.toUpperCase().trim();
     const ap = state.airports[code];
+    const sel = doc("tatIsDomestic");
     if (ap) {
-      doc("tatIsDomestic").value = ap.timezone_offset === 7 ? "true" : "false";
+      sel.value = ap.timezone_offset === 7 ? "true" : "false";
+      sel.disabled = true;
+      sel.title = "Tự động từ múi giờ sân bay";
+    } else {
+      sel.disabled = false;
+      sel.title = "";
     }
   });
   doc("btnExportTAT").addEventListener("click", exportTATExcel);
@@ -2329,10 +2867,13 @@ function bindUI() {
     doc("regNumber").value = "";
     doc("regModel").value = "";
     doc("regSeats").value = "";
+    doc("regDW").value = "";
     doc("regForm").classList.remove("hidden");
   });
   doc("btnSaveReg").addEventListener("click", saveReg);
   doc("btnCancelReg").addEventListener("click", () => doc("regForm").classList.add("hidden"));
+  doc("btnExportRegExcel").addEventListener("click", () => { window.location.href = "/api/rules/registration/export/excel"; });
+  doc("btnExportRegCsv").addEventListener("click",   () => { window.location.href = "/api/rules/registration/export/csv"; });
 
   // User management
   doc("btnAddUser").addEventListener("click", () => {
@@ -2366,6 +2907,10 @@ function bindUI() {
   doc("btnRunExport").addEventListener("click", runExport);
   doc("btnDownloadTT").addEventListener("click", () => {
     if (state.lastExportData) downloadJSON(state.lastExportData, "timetable.json");
+    else alert("Hãy xem trước rồi tải.");
+  });
+  doc("btnDownloadExcel").addEventListener("click", () => {
+    if (state.lastExportData) downloadExcel(state.lastExportData, "timetable.xlsx");
     else alert("Hãy xem trước rồi tải.");
   });
 
@@ -2417,6 +2962,75 @@ function bindUI() {
   // Paste modal confirm
   const _btnConfirmPaste = doc("btnConfirmPaste");
   if (_btnConfirmPaste) _btnConfirmPaste.addEventListener("click", confirmPaste);
+
+  // Note modal
+  const _btnSaveNote = doc("btnSaveNote");
+  if (_btnSaveNote) _btnSaveNote.addEventListener("click", saveNote);
+  const _btnDeleteNote = doc("btnDeleteNote");
+  if (_btnDeleteNote) _btnDeleteNote.addEventListener("click", deleteNoteById);
+}
+
+// ─── Note modal ──────────────────────────────────────────────────────────────
+
+function openNoteModal(note, dateStr) {
+  // note: existing CalendarNote object, or null for new
+  // dateStr: "YYYY-MM-DD"
+  const isEdit = !!note;
+  doc("noteModalTitle").innerHTML = isEdit
+    ? '<i class="fas fa-sticky-note"></i> Sửa ghi chú'
+    : '<i class="fas fa-sticky-note"></i> Thêm ghi chú';
+  doc("noteId").value        = isEdit ? note.id        : "";
+  doc("noteDate").value      = isEdit ? note.note_date : (dateStr || "");
+  doc("noteContent").value   = isEdit ? note.content   : "";
+  doc("noteStartTime").value = isEdit ? (note.start_time || "") : "";
+  doc("noteEndTime").value   = isEdit ? (note.end_time   || "") : "";
+  doc("noteColor").value     = isEdit ? (note.color || "#3b82f6") : "#3b82f6";
+
+  const btnDel = doc("btnDeleteNote");
+  if (btnDel) {
+    btnDel.classList.toggle("hidden", !isEdit || state.userRole !== "admin");
+  }
+
+  doc("noteModalOverlay").classList.remove("hidden");
+  doc("noteContent").focus();
+}
+
+async function saveNote() {
+  const content = (doc("noteContent").value || "").trim();
+  if (!content) { alert("Vui lòng nhập nội dung ghi chú."); return; }
+
+  const id         = doc("noteId").value;
+  const note_date  = doc("noteDate").value;
+  const start_time = doc("noteStartTime").value || null;
+  const end_time   = doc("noteEndTime").value   || null;
+  const color      = doc("noteColor").value || "#3b82f6";
+
+  try {
+    if (id) {
+      await API.updateNote(Number(id), { content, start_time, end_time, color });
+    } else {
+      await API.createNote({ note_date, content, start_time, end_time, color });
+    }
+    doc("noteModalOverlay").classList.add("hidden");
+    refreshMonthView();
+  } catch (e) {
+    alert("Lỗi khi lưu ghi chú: " + (e.message || e));
+  }
+}
+
+async function deleteNoteById() {
+  if (state.userRole !== "admin") return;
+  const id = doc("noteId").value;
+  if (!id) return;
+  const ok = await showConfirm("Bạn có chắc muốn xoá ghi chú này?");
+  if (!ok) return;
+  try {
+    await API.deleteNote(Number(id));
+    doc("noteModalOverlay").classList.add("hidden");
+    refreshMonthView();
+  } catch (e) {
+    alert("Lỗi khi xoá ghi chú: " + (e.message || e));
+  }
 }
 
 // ─── Expose helpers used from inline onclick attributes ───────────────────────
@@ -2435,6 +3049,7 @@ window.deleteSeason = deleteSeason;
 window.openMaintenanceModal = openMaintenanceModal;
 window.openSwapModal        = openSwapModal;
 window.openPasteModal       = openPasteModal;
+window.openNoteModal        = openNoteModal;
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", init);

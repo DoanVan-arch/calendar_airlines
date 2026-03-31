@@ -33,6 +33,7 @@ class AircraftBase(BaseModel):
     ac_type: Optional[str] = None
     line_order: int = 0
     color: Optional[str] = None
+    registration_id: Optional[int] = None  # FK to registrations.id; None = TẠM
 
 
 class AircraftCreate(AircraftBase):
@@ -45,6 +46,7 @@ class AircraftUpdate(BaseModel):
     ac_type: Optional[str] = None
     line_order: Optional[int] = None
     color: Optional[str] = None
+    registration_id: Optional[int] = None  # FK to registrations.id; None = TẠM
 
 
 class AircraftOut(AircraftBase):
@@ -152,6 +154,7 @@ class RegistrationBase(BaseModel):
     registration: str
     aircraft_model: str
     seats: int
+    dw_type: Optional[str] = None  # "Dry", "Wet", or None
 
 
 class RegistrationCreate(RegistrationBase):
@@ -162,6 +165,7 @@ class RegistrationUpdate(BaseModel):
     registration: Optional[str] = None
     aircraft_model: Optional[str] = None
     seats: Optional[int] = None
+    dw_type: Optional[str] = None  # "Dry", "Wet", or None
 
 
 class RegistrationOut(RegistrationBase):
@@ -218,6 +222,8 @@ class MaintenanceBase(BaseModel):
     label: str = "Maintenance"
     start_date: str           # YYYY-MM-DD
     end_date: str             # YYYY-MM-DD
+    start_time: Optional[str] = None   # HH:MM UTC (None = full day)
+    end_time: Optional[str] = None     # HH:MM UTC (None = full day)
     color: Optional[str] = "#f59e0b"
 
 
@@ -229,6 +235,8 @@ class MaintenanceUpdate(BaseModel):
     label: Optional[str] = None
     start_date: Optional[str] = None
     end_date: Optional[str] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
     color: Optional[str] = None
 
 
@@ -246,4 +254,30 @@ class AuditLogOut(BaseModel):
     entity: str
     entity_id: Optional[int] = None
     detail: Optional[str] = None
+    model_config = {"from_attributes": True}
+
+
+# ── Calendar notes ──────────────────────────────────────────────────────────────
+class CalendarNoteBase(BaseModel):
+    note_date: str               # YYYY-MM-DD
+    start_time: Optional[str] = None   # HH:MM
+    end_time: Optional[str] = None     # HH:MM
+    content: str
+    color: Optional[str] = "#3b82f6"
+
+
+class CalendarNoteCreate(CalendarNoteBase):
+    pass
+
+
+class CalendarNoteUpdate(BaseModel):
+    note_date: Optional[str] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    content: Optional[str] = None
+    color: Optional[str] = None
+
+
+class CalendarNoteOut(CalendarNoteBase):
+    id: int
     model_config = {"from_attributes": True}

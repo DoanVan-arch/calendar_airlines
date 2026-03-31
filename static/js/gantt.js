@@ -1,7 +1,9 @@
 /* gantt.js – Renders the Gantt chart and handles drag-and-drop */
 
-const MINUTES_TOTAL = 1500;   // 25 h shown (covers slight overnight)
-const PX_PER_MIN   = 2;       // zoom: 2px per minute → 3000px wide
+let DAYS_SHOWN  = 3;         // default number of days rendered in the infinite ruler
+const MINUTES_PER_DAY = 1440;
+function MINUTES_TOTAL() { return DAYS_SHOWN * MINUTES_PER_DAY; }  // computed dynamically
+let PX_PER_MIN   = 2;       // zoom: 2px per minute → 2880px per day
 const ROW_H        = 64;      // px (sector block + gap)
 const LABEL_W      = 130;     // must match CSS --label-w
 
@@ -31,6 +33,17 @@ function minToTime(m) {
 
 function applyTZ(hhmm, offsetHours) {
   return minToTime(timeToMin(hhmm) + Math.round(offsetHours * 60));
+}
+
+/** Format a duration in minutes:
+ *  ≤ 60  → "45'"  (just minutes + apostrophe)
+ *  > 60  → "1:25" (H:MM, no leading zero on hours)
+ */
+function formatDuration(minutes) {
+  if (minutes <= 60) return `${minutes}'`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return `${h}:${String(m).padStart(2, "0")}`;
 }
 
 class GanttChart {
@@ -70,6 +83,70 @@ class GanttChart {
     this._bindTimeDragGlobal();
     this._bindRowDragGlobal();
     this._bindDragCleanup();
+    this._bindZoom();
+  }
+
+  // ── Zoom (Ctrl+wheel) ─────────────────────────────────────────────────────
+  _bindZoom() {
+    const MIN_PX = 0.3;   // very zoomed out (≈ 432px per day)
+    const MAX_PX = 8;     // very zoomed in (≈ 11520px per day)
+    const STEP   = 1.15;  // 15% per notch
+
+    this.$scrollArea.addEventListener("wheel", e => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+
+      // Where the cursor points in time (minutes from start)
+      const rect     = this.$scrollArea.getBoundingClientRect();
+      const cursorX  = e.clientX - rect.left + this.$scrollArea.scrollLeft;
+      const cursorMin= cursorX / PX_PER_MIN;
+
+      // Apply zoom
+      const oldPx = PX_PER_MIN;
+      if (e.deltaY < 0) {
+        PX_PER_MIN = Math.min(MAX_PX, PX_PER_MIN * STEP);
+      } else {
+        PX_PER_MIN = Math.max(MIN_PX, PX_PER_MIN / STEP);
+      }
+
+      if (PX_PER_MIN === oldPx) return; // no change (clamped)
+
+      // Re-render with stored data
+      if (this._aircraft) {
+        this._reRender();
+      }
+
+      // Restore scroll so the same minute stays under the cursor
+      const newCursorX = cursorMin * PX_PER_MIN;
+      this.$scrollArea.scrollLeft = newCursorX - (e.clientX - rect.left);
+
+      // Update zoom indicator
+      this._updateZoomIndicator();
+    }, { passive: false });
+  }
+
+  _reRender() {
+    this.render({
+      aircraft   : this._aircraft,
+      sectors    : this._sectors,
+      airports   : this._airports,
+      timezone   : this._timezone,
+      warnings   : this._lastWarnings || [],
+      maintenance: this._maintenance,
+      currentDate: this._currentDate,
+    });
+  }
+
+  _updateZoomIndicator() {
+    const pct = Math.round((PX_PER_MIN / 2) * 100); // 2 is default
+    const el = document.getElementById("zoomIndicator");
+    if (el) el.textContent = `${pct}%`;
+  }
+
+  resetZoom() {
+    PX_PER_MIN = 2;
+    if (this._aircraft) this._reRender();
+    this._updateZoomIndicator();
   }
 
   // ── Public render ───────────────────────────────────────────────────────────
@@ -80,6 +157,7 @@ class GanttChart {
     this._timezone    = timezone;
     this._maintenance = maintenance || [];
     this._currentDate = currentDate || "";
+    this._lastWarnings = warnings || [];
 
     // Build aircraft color map: acId → color (null if not set)
     this._acColorMap = {};
@@ -99,11 +177,12 @@ class GanttChart {
     const active    = aircraft.filter(ac => ac.id !== -1);
     const cancelled = sectors.filter(s => s.status === "cancelled");
 
-    // Rebuild ruler with current timezone
-    this._buildRuler();
-
     this.$labelCol.innerHTML = "";
     this.$rows.innerHTML     = "";
+
+    // Rebuild ruler with current timezone (must come after label-col clear
+    // because _buildRuler prepends the TZ header into label-col)
+    this._buildRuler();
 
     // Reset element map (sectors are re-created on each render)
     this._sectorEls = new Map();
@@ -118,16 +197,27 @@ class GanttChart {
       this._addCancelledRow(cancelled);
     }
 
-    // Set total width
-    const totalW = MINUTES_TOTAL * PX_PER_MIN;
-    this.$ruler.style.width = totalW + "px";
+    // Set total width — rows and ruler must match for column alignment
+    const totalW = MINUTES_TOTAL() * PX_PER_MIN;
     this.$rows.style.width  = totalW + "px";
+    this.$ruler.style.minWidth = totalW + "px";
+
+    // Set dynamic hour width for grid lines (CSS variable)
+    this.$rows.style.setProperty("--hour-w", (PX_PER_MIN * 60) + "px");
   }
 
-  // ── Ruler (dual row: UTC top, LCT bottom) ──────────────────────────────────
+  // ── Ruler (dual row: UTC top, LCT bottom, DAYS_SHOWN days wide) ──────────
   _buildRuler() {
     this.$ruler.innerHTML = "";
-    const totalHours = Math.ceil(MINUTES_TOTAL / 60);
+    const totalHours = DAYS_SHOWN * 24;  // always full days
+
+    // Parse base date for date-change labels
+    let baseDate = null;
+    if (this._currentDate) {
+      const parts = this._currentDate.split("-");
+      if (parts.length === 3) baseDate = new Date(+parts[0], +parts[1]-1, +parts[2]);
+    }
+    const fmtDate = (d) => `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}`;
 
     // Top row: UTC hours
     const utcRow = document.createElement("div");
@@ -137,33 +227,65 @@ class GanttChart {
     const lctRow = document.createElement("div");
     lctRow.className = "ruler-row ruler-row-lct";
 
+    // Build TZ labels in the label-column header area (instead of inside ruler rows)
+    // so the ruler hour cells align perfectly with the gantt-row grid lines.
+    const labelHeader = document.createElement("div");
+    labelHeader.className = "label-col-header";
+    labelHeader.innerHTML = `
+      <div class="ruler-tz-badge ruler-tz-badge-left">
+        <span class="ruler-tz-label">UTC</span>${baseDate ? `<span class="ruler-tz-date">${fmtDate(baseDate)}</span>` : ""}
+      </div>
+      <div class="ruler-tz-badge ruler-tz-badge-left ruler-tz-badge-lct">
+        <span class="ruler-tz-label">LCT+7</span>${baseDate ? `<span class="ruler-tz-date">${fmtDate(baseDate)}</span>` : ""}
+      </div>`;
+    this.$labelCol.prepend(labelHeader);
+
     for (let h = 0; h < totalHours; h++) {
-      // UTC cell
+      const utcH = h % 24;
+      const lctH = (h + 7) % 24;
+      const hourW = PX_PER_MIN * 60;  // dynamic width per hour
+
+      // UTC cell — show prominent date chip at each day boundary (UTC midnight)
       const utcEl = document.createElement("div");
       utcEl.className = "ruler-hour";
-      utcEl.textContent = String(h % 24).padStart(2, "0") + ":00";
-      if (h % 24 === 0 && h > 0) utcEl.classList.add("ruler-midnight");
+      utcEl.style.width = hourW + "px";
+      if (utcH === 0) {
+        utcEl.classList.add("ruler-midnight");
+        if (h === 0) {
+          // First cell: just show time (date is in badge)
+          utcEl.textContent = "00:00";
+        } else if (baseDate) {
+          const dayOff = Math.floor(h / 24);
+          const nextD = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate() + dayOff);
+          utcEl.innerHTML = `<span class="ruler-date-chip ruler-date-chip-day">${fmtDate(nextD)}</span><span>00:00</span>`;
+        } else {
+          utcEl.textContent = "00:00";
+        }
+      } else {
+        utcEl.textContent = String(utcH).padStart(2, "0") + ":00";
+      }
       utcRow.appendChild(utcEl);
 
-      // LCT cell (UTC+7)
+      // LCT cell — show date chip when rolling over to next LCT day (lctH === 0)
       const lctEl = document.createElement("div");
       lctEl.className = "ruler-hour ruler-hour-lct";
-      const lctH = (h + 7) % 24;
-      lctEl.textContent = String(lctH).padStart(2, "0") + ":00";
-      if (lctH === 0 && h > 0) lctEl.classList.add("ruler-midnight");
+      lctEl.style.width = hourW + "px";
+      if (lctH === 0) {
+        lctEl.classList.add("ruler-midnight");
+        if (h === 0) {
+          lctEl.textContent = String((h + 7) % 24).padStart(2,"0") + ":00"; // won't be 0 at h=0
+        } else if (baseDate) {
+          const lctDayOffset = Math.floor((h + 7) / 24);
+          const nextLctD = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate() + lctDayOffset);
+          lctEl.innerHTML = `<span class="ruler-date-chip">${fmtDate(nextLctD)}</span><span>00:00</span>`;
+        } else {
+          lctEl.textContent = "00:00";
+        }
+      } else {
+        lctEl.textContent = String(lctH).padStart(2, "0") + ":00";
+      }
       lctRow.appendChild(lctEl);
     }
-
-    // TZ labels at far-right
-    const utcBadge = document.createElement("div");
-    utcBadge.className = "ruler-tz-badge";
-    utcBadge.textContent = "UTC";
-    utcRow.appendChild(utcBadge);
-
-    const lctBadge = document.createElement("div");
-    lctBadge.className = "ruler-tz-badge ruler-tz-badge-lct";
-    lctBadge.textContent = "LCT+7";
-    lctRow.appendChild(lctBadge);
 
     this.$ruler.appendChild(utcRow);
     this.$ruler.appendChild(lctRow);
@@ -177,15 +299,18 @@ class GanttChart {
       if (a <= d) a += 1440;
       return sum + (a - d);
     }, 0);
-    const bh = Math.floor(totalBMin / 60);
-    const bm = totalBMin % 60;
-    const bhStr = `${bh}h${String(bm).padStart(2,"00")}m`;
+    // Numeric hours format: e.g. "8.5h", "0.0h"
+    const bhNum  = (totalBMin / 60).toFixed(1);
+    const bhStr  = `${bhNum}h`;
 
     // Color swatch for aircraft
     const acColor = this._acColorMap[ac.id];
     const swatchHtml = acColor
       ? `<span class="color-swatch" style="background:${acColor};"></span>`
       : "";
+
+    // Sector count
+    const sectorCount = sectors.length;
 
     // Label
     const lbl = document.createElement("div");
@@ -197,7 +322,8 @@ class GanttChart {
       ${swatchHtml}
       <span class="ac-reg">${ac.registration}</span>
       <span class="ac-sub">${ac.ac_type || ac.name || "&nbsp;"}</span>
-      <span class="ac-bh" title="Tổng block hôm nay">${bhStr}</span>`;
+      <span class="ac-bh" title="Tổng block hôm nay">${bhStr}</span>
+      <span class="ac-sectors" title="Số chặng bay">${sectorCount} chặng</span>`;
     
     // Rich hover tooltip for registration info — appended to body to escape overflow:hidden
     if (ac.registration_info) {
@@ -205,6 +331,7 @@ class GanttChart {
         <div class="ac-tip-header">${ac.registration}</div>
         <div class="ac-tip-row"><span class="ac-tip-label">Mẫu máy bay</span><span class="ac-tip-val">${ac.registration_info.aircraft_model}</span></div>
         <div class="ac-tip-row"><span class="ac-tip-label">Số ghế</span><span class="ac-tip-val">${ac.registration_info.seats}</span></div>
+        <div class="ac-tip-row"><span class="ac-tip-label">Số chặng</span><span class="ac-tip-val">${sectorCount}</span></div>
         <div class="ac-tip-row"><span class="ac-tip-label">Block hôm nay</span><span class="ac-tip-val">${bhStr}</span></div>`;
 
       let tip = null;
@@ -292,26 +419,36 @@ class GanttChart {
     row.className = "gantt-row";
     row.dataset.acId = ac.id;
     row.style.height = ROW_H + "px";
-    row.style.minWidth = MINUTES_TOTAL * PX_PER_MIN + "px";
+    row.style.minWidth = MINUTES_TOTAL() * PX_PER_MIN + "px";
 
     this._attachDropHandlers(row, ac.id);
 
-    // Sort by dep time; render blocks + TAT gaps between consecutive sectors
-    const sorted = [...sectors].sort((a, b) => timeToMin(a.dep_utc) - timeToMin(b.dep_utc));
+    // Sort by effective departure time (accounting for day offset)
+    const sorted = [...sectors].sort((a, b) => {
+      const dayA = a._dayOffset || (a._nextDay ? 1 : 0);
+      const dayB = b._dayOffset || (b._nextDay ? 1 : 0);
+      const am = timeToMin(a.dep_utc) + dayA * MINUTES_PER_DAY;
+      const bm = timeToMin(b.dep_utc) + dayB * MINUTES_PER_DAY;
+      return am - bm;
+    });
     for (let i = 0; i < sorted.length; i++) {
       row.appendChild(this._makeSectorBlock(sorted[i]));
       if (i < sorted.length - 1) {
+        // Draw TAT gap for consecutive sectors (same-day or adjacent days)
         const gap = this._makeTATGap(sorted[i], sorted[i + 1]);
         if (gap) row.appendChild(gap);
       }
     }
 
-    // Render maintenance blocks for this aircraft on current date
+    // Render maintenance blocks for each visible day
     const mxBlocks = (this._maintenance || []).filter(m => m.aircraft_id === ac.id);
-    for (const mx of mxBlocks) {
-      if (mx.start_date <= this._currentDate && mx.end_date >= this._currentDate) {
-        const mxEl = this._makeMaintenanceBlock(mx);
-        row.appendChild(mxEl);
+    for (let dayOff = 0; dayOff < DAYS_SHOWN; dayOff++) {
+      const dayDate = this._getDayDate(dayOff);
+      for (const mx of mxBlocks) {
+        if (mx.start_date <= dayDate && mx.end_date >= dayDate) {
+          const mxEl = this._makeMaintenanceBlock(mx, dayDate, dayOff);
+          row.appendChild(mxEl);
+        }
       }
     }
 
@@ -330,24 +467,68 @@ class GanttChart {
     const row = document.createElement("div");
     row.className = "gantt-row gantt-row-cancelled";
     row.style.height = ROW_H + "px";
-    row.style.minWidth = MINUTES_TOTAL * PX_PER_MIN + "px";
+    row.style.minWidth = MINUTES_TOTAL() * PX_PER_MIN + "px";
 
     const sorted = [...cancelled].sort((a, b) => timeToMin(a.dep_utc) - timeToMin(b.dep_utc));
     for (const s of sorted) row.appendChild(this._makeSectorBlock(s));
     this.$rows.appendChild(row);
   }
 
-  // ── Maintenance block (full-width bar for the day) ─────────────────────────
-  _makeMaintenanceBlock(mx) {
+  // ── Helper: get the date string for a given day offset from currentDate ──
+  _getDayDate(dayOff) {
+    if (!this._currentDate) return "";
+    const parts = this._currentDate.split("-");
+    const d = new Date(+parts[0], +parts[1]-1, +parts[2]);
+    d.setDate(d.getDate() + dayOff);
+    const y = d.getFullYear();
+    const mo = String(d.getMonth()+1).padStart(2,"0");
+    const dy = String(d.getDate()).padStart(2,"0");
+    return `${y}-${mo}-${dy}`;
+  }
+
+  // ── Maintenance block (positional bar respecting start/end time + day offset) ─
+  _makeMaintenanceBlock(mx, dayDate, dayOff) {
+    // dayDate: YYYY-MM-DD string for this particular day column
+    // dayOff: integer day offset (0 = base date, 1 = next day, etc.)
+    const colDate = dayDate || this._currentDate;
+    const colOff  = dayOff  || 0;
+
     const el = document.createElement("div");
     el.className = "maintenance-block";
     const color = mx.color || "#f59e0b";
     el.style.background = color + "33";  // ~20% opacity background
     el.style.borderColor = color;
-    el.style.left  = "0px";
-    el.style.width = (MINUTES_TOTAL * PX_PER_MIN) + "px";
-    el.innerHTML = `<span class="mx-label"><i class="fas fa-wrench"></i> ${mx.label || "Maintenance"}</span>`;
-    el.title = `Bảo dưỡng: ${mx.label || "Maintenance"}\n${mx.start_date} → ${mx.end_date}`;
+
+    // Determine position within this day's column (0..MINUTES_PER_DAY)
+    const isStartDay = mx.start_date === colDate;
+    const isEndDay   = mx.end_date   === colDate;
+
+    let dayLeftMin  = 0;                // within the day (0..1440)
+    let dayRightMin = MINUTES_PER_DAY; // within the day
+
+    if (mx.start_time && isStartDay) {
+      dayLeftMin = timeToMin(mx.start_time);
+    }
+    if (mx.end_time && isEndDay) {
+      dayRightMin = timeToMin(mx.end_time);
+    }
+
+    // Clamp to valid range
+    dayLeftMin  = Math.max(0, dayLeftMin);
+    dayRightMin = Math.min(MINUTES_PER_DAY, dayRightMin);
+
+    // Absolute position on the full multi-day canvas
+    const absLeft  = colOff * MINUTES_PER_DAY + dayLeftMin;
+    const absRight = colOff * MINUTES_PER_DAY + dayRightMin;
+
+    el.style.left  = (absLeft  * PX_PER_MIN) + "px";
+    el.style.width = (Math.max(absRight - absLeft, 1) * PX_PER_MIN) + "px";
+
+    const timeLabel = (mx.start_time || mx.end_time)
+      ? ` (${mx.start_time || "00:00"}–${mx.end_time || "--:--"})`
+      : "";
+    el.innerHTML = `<span class="mx-label"><i class="fas fa-wrench"></i> ${mx.label || "Maintenance"}${timeLabel}</span>`;
+    el.title = `Bảo dưỡng: ${mx.label || "Maintenance"}\n${mx.start_date}${mx.start_time ? " " + mx.start_time : ""} → ${mx.end_date}${mx.end_time ? " " + mx.end_time : ""}`;
     // Allow admin to click to edit
     el.addEventListener("click", e => {
       e.stopPropagation();
@@ -358,38 +539,58 @@ class GanttChart {
 
   // ── TAT gap marker between two consecutive sectors ─────────────────────────
   _makeTATGap(prev, next) {
-    const arrMin = timeToMin(prev.arr_utc);
-    let   depMin = timeToMin(next.dep_utc);
-    if (depMin < arrMin) depMin += 1440;
+    // Account for day offset so TAT gaps position correctly on multi-day canvas
+    const prevDayOff = prev._dayOffset !== undefined ? prev._dayOffset : (prev._nextDay ? 1 : 0);
+    const nextDayOff = next._dayOffset !== undefined ? next._dayOffset : (next._nextDay ? 1 : 0);
+
+    // Compute absolute arrival minute for 'prev' sector
+    // Must mirror _makeSectorBlock logic: if arr <= dep within same day, it's overnight
+    const prevDepMin = timeToMin(prev.dep_utc) + prevDayOff * MINUTES_PER_DAY;
+    let   arrMin     = timeToMin(prev.arr_utc) + prevDayOff * MINUTES_PER_DAY;
+    if (arrMin <= prevDepMin) arrMin += MINUTES_PER_DAY;
+
+    // Compute absolute departure minute for 'next' sector
+    const depMin = timeToMin(next.dep_utc) + nextDayOff * MINUTES_PER_DAY;
+
     const gapMin = depMin - arrMin;
-    if (gapMin <= 0) return null;
+    if (gapMin <= 0) return null;  // overlapping or no gap
 
     // Determine required TAT (station-specific or mass default)
     const dest = prev.destination;
     let reqTAT;
-    if (state.tatRules[dest]) {
+    if (state.tatRules && state.tatRules[dest]) {
       reqTAT = state.tatRules[dest].min_tat_minutes;
     } else {
-      const ap = state.airports[dest];
+      const ap = state.airports && state.airports[dest];
       const isDomestic = ap && ap.timezone_offset === 7;
-      reqTAT = isDomestic ? state.massTAT.domestic : state.massTAT.international;
+      const mass = state.massTAT || { domestic: 40, international: 60 };
+      reqTAT = isDomestic ? mass.domestic : mass.international;
     }
 
     const el = document.createElement("div");
     el.className = "tat-gap";
-    if (gapMin < reqTAT) el.classList.add("tat-violation");
+    if (reqTAT && gapMin < reqTAT) el.classList.add("tat-violation");
     el.style.left  = arrMin * PX_PER_MIN + "px";
     el.style.width = Math.max(gapMin * PX_PER_MIN, 2) + "px";
-    if (gapMin >= 15) el.textContent = gapMin + "′";
-    el.title = `TAT tại ${dest}: ${gapMin} phút (yêu cầu ${reqTAT} phút)`;
+    if (gapMin >= 15) {
+      const gh = Math.floor(gapMin / 60);
+      const gm = gapMin % 60;
+      el.textContent = gh > 0
+        ? `${gh}:${String(gm).padStart(2,"0")}`
+        : `${gm}'`;
+    }
+    el.title = `TAT tại ${dest}: ${gapMin} phút${reqTAT ? ` (yêu cầu ${reqTAT} phút)` : ""}`;
     return el;
   }
 
   // ── Sector block ────────────────────────────────────────────────────────────
   _makeSectorBlock(sector) {
-    const depMin = timeToMin(sector.dep_utc);
-    let   arrMin = timeToMin(sector.arr_utc);
-    if (arrMin <= depMin) arrMin += 1440; // overnight
+    // Support both _dayOffset (new) and _nextDay (legacy) for day positioning
+    const dayOff   = sector._dayOffset !== undefined ? sector._dayOffset : (sector._nextDay ? 1 : 0);
+    const isNonBase= dayOff > 0;
+    const depMin = timeToMin(sector.dep_utc) + dayOff * MINUTES_PER_DAY;
+    let   arrMin = timeToMin(sector.arr_utc) + dayOff * MINUTES_PER_DAY;
+    if (arrMin <= depMin) arrMin += MINUTES_PER_DAY; // overnight flight
     const btMin = arrMin - depMin;
 
     const left  = depMin * PX_PER_MIN;
@@ -400,6 +601,7 @@ class GanttChart {
     if (sector.status === "cancelled")        el.classList.add("cancelled");
     if (this._errorIds.has(sector.id))        el.classList.add("has-error");
     else if (this._warningIds.has(sector.id)) el.classList.add("has-warning");
+    // next-day sectors are styled identically to day-0 (no separate class)
 
     el.dataset.sectorId = sector.id;
     el.style.left  = left  + "px";
@@ -408,7 +610,7 @@ class GanttChart {
     const bg = sector.color
       || (this._acColorMap && this._acColorMap[sector.aircraft_id])
       || routeColor(sector.origin, sector.destination);
-    el.style.background = sector.status === "cancelled"
+    el.style.background = (sector.status === "cancelled")
       ? "rgba(60,60,70,0.8)"
       : bg;
 
@@ -417,9 +619,7 @@ class GanttChart {
     const arrDisp = this._displayTime(sector.arr_utc, sector.destination);
 
     // Block time string
-    const bh = Math.floor(btMin / 60);
-    const bm = btMin % 60;
-    const btStr = `${bh}h${String(bm).padStart(2,"00")}m`;
+    const btStr = formatDuration(btMin);
 
     // Adaptive content based on available width
     const showRoute = width >= 44;
@@ -443,6 +643,7 @@ class GanttChart {
     const arrLCT = applyTZ(sector.arr_utc, arrOff);
     el.title = [
       `${sector.origin} → ${sector.destination}${sector.flight_number ? "  (" + sector.flight_number + ")" : ""}`,
+      isNonBase ? `[Ngày +${dayOff} — ${sector.flight_date}]` : "",
       `Dep UTC:${sector.dep_utc}  LCT(+${depOff}): ${depLCT}`,
       `Arr UTC:${sector.arr_utc}  LCT(+${arrOff}): ${arrLCT}`,
       `Block: ${btMin}′ (${btStr})`,
@@ -562,8 +763,9 @@ class GanttChart {
     if (e.button !== 0) return;
     // Don't preventDefault here — let dragstart fire; we suppress it there if needed
 
-    const depMin = timeToMin(sector.dep_utc);
-    let   arrMin = timeToMin(sector.arr_utc);
+    const dayOff = sector._dayOffset !== undefined ? sector._dayOffset : (sector._nextDay ? 1 : 0);
+    const depMin = timeToMin(sector.dep_utc) + dayOff * MINUTES_PER_DAY;
+    let   arrMin = timeToMin(sector.arr_utc) + dayOff * MINUTES_PER_DAY;
     if (arrMin <= depMin) arrMin += 1440;
     const btMin = arrMin - depMin;
 
@@ -573,6 +775,7 @@ class GanttChart {
       startX       : e.clientX,
       startDepMin  : depMin,
       btMin,
+      dayOff,
       scrollLeft   : this.$scrollArea.scrollLeft,
       activated    : false,   // becomes true once mouse moves > threshold
     };
@@ -607,7 +810,7 @@ class GanttChart {
 
       let newDepMin = startDepMin + snappedDelta;
       // Clamp within 25h canvas
-      newDepMin = Math.max(0, Math.min(MINUTES_TOTAL - btMin, newDepMin));
+      newDepMin = Math.max(0, Math.min(MINUTES_TOTAL() - btMin, newDepMin));
 
       const newArrMin = newDepMin + btMin;
       const newDepUtc = minToTime(newDepMin);
@@ -663,10 +866,11 @@ class GanttChart {
         this._clearSelection();
 
         if (this._timeDrag) {
-          const { sector, el } = this._timeDrag;
-          // Reset position
-          const depMin = timeToMin(sector.dep_utc);
-          let arrMin = timeToMin(sector.arr_utc);
+          const { sector, el, dayOff } = this._timeDrag;
+          // Reset position (account for dayOffset)
+          const dOff = dayOff || 0;
+          const depMin = timeToMin(sector.dep_utc) + dOff * MINUTES_PER_DAY;
+          let arrMin = timeToMin(sector.arr_utc) + dOff * MINUTES_PER_DAY;
           if (arrMin <= depMin) arrMin += 1440;
           el.style.left  = (depMin * PX_PER_MIN) + "px";
           el.style.width = ((arrMin - depMin) * PX_PER_MIN) + "px";

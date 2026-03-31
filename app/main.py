@@ -11,6 +11,7 @@ from .database import engine, SessionLocal
 from .models import Base, Airport, BlockTimeRule, TATRule, Registration, User
 from .routers import aircraft, sectors, rules, export, auth as auth_router
 from .routers import seasons as seasons_router, maintenance as maintenance_router, audit as audit_router
+from .routers import notes as notes_router
 from .routers.auth import is_authenticated, ensure_admin_user
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -213,6 +214,48 @@ def _migrate_db():
         except Exception:
             pass
 
+        # Add dw_type column to registrations table
+        try:
+            conn.execute(text("ALTER TABLE registrations ADD COLUMN dw_type VARCHAR(10)"))
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+
+        # Add registration_id column to aircraft table
+        try:
+            conn.execute(text("ALTER TABLE aircraft ADD COLUMN registration_id INTEGER"))
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+
+        # Add start_time and end_time columns to maintenance_blocks
+        try:
+            conn.execute(text("ALTER TABLE maintenance_blocks ADD COLUMN start_time VARCHAR(5)"))
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+        try:
+            conn.execute(text("ALTER TABLE maintenance_blocks ADD COLUMN end_time VARCHAR(5)"))
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+
+        # Create calendar_notes table
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS calendar_notes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    note_date VARCHAR(10) NOT NULL,
+                    start_time VARCHAR(5),
+                    end_time VARCHAR(5),
+                    content VARCHAR(1000) NOT NULL,
+                    color VARCHAR(20) DEFAULT '#3b82f6'
+                )
+            """))
+            conn.commit()
+        except Exception:
+            pass
+
 
 app = FastAPI(title="Airline Schedule Manager", lifespan=lifespan)
 
@@ -254,6 +297,7 @@ app.include_router(export.router,             prefix="/api/export",      tags=["
 app.include_router(seasons_router.router,     prefix="/api/seasons",     tags=["seasons"])
 app.include_router(maintenance_router.router, prefix="/api/maintenance",  tags=["maintenance"])
 app.include_router(audit_router.router,       prefix="/api/audit",       tags=["audit"])
+app.include_router(notes_router.router,       prefix="/api/notes",       tags=["notes"])
 
 
 @app.get("/login")

@@ -285,6 +285,20 @@ def get_warnings(
                         ),
                     })
 
+                # 3. Base mismatch: prev sector destination ≠ next sector origin
+                if s.destination != next_s.origin:
+                    warnings.append({
+                        "type": "BASE_MISMATCH",
+                        "severity": "warning",
+                        "sector_id": s.id,
+                        "next_sector_id": next_s.id,
+                        "aircraft": ac.registration,
+                        "message": (
+                            f"{ac.registration} | Base mismatch: chặng {s.origin}→{s.destination} "
+                            f"(arr {s.destination}) nhưng chặng tiếp theo xuất phát từ {next_s.origin}"
+                        ),
+                    })
+
         # 3. Overnight continuity – compare with next day's first sector
         try:
             next_date = (datetime.strptime(date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")

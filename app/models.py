@@ -18,6 +18,7 @@ class Aircraft(Base):
     ac_type = Column(String(50), nullable=True)   # e.g. A320, B737-800
     line_order = Column(Integer, default=0)
     color = Column(String(20), nullable=True)      # hex color e.g. "#2563eb"
+    registration_id = Column(Integer, nullable=True)  # FK to registrations.id; None = TẠM (no link)
 
 
 class Registration(Base):
@@ -27,6 +28,7 @@ class Registration(Base):
     registration = Column(String(20), unique=True, nullable=False)  # VN-A123
     aircraft_model = Column(String(100), nullable=False)  # Airbus 321
     seats = Column(Integer, nullable=False)  # 200
+    dw_type = Column(String(10), nullable=True)  # "Dry", "Wet", or None
 
 
 class FlightSector(Base):
@@ -91,6 +93,8 @@ class MaintenanceBlock(Base):
     label = Column(String(100), nullable=False, default="Maintenance")
     start_date = Column(String(10), nullable=False)  # YYYY-MM-DD
     end_date = Column(String(10), nullable=False)    # YYYY-MM-DD
+    start_time = Column(String(5), nullable=True)    # HH:MM UTC (optional)
+    end_time = Column(String(5), nullable=True)      # HH:MM UTC (optional)
     color = Column(String(20), nullable=True, default="#f59e0b")
 
 
@@ -104,3 +108,14 @@ class AuditLog(Base):
     entity = Column(String(50), nullable=False)   # sector | aircraft | maintenance
     entity_id = Column(Integer, nullable=True)
     detail = Column(String(500), nullable=True)   # human-readable summary
+
+
+class CalendarNote(Base):
+    """A note attached to a specific calendar date (shown in month view)."""
+    __tablename__ = "calendar_notes"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    note_date = Column(String(10), nullable=False)   # YYYY-MM-DD
+    start_time = Column(String(5), nullable=True)    # HH:MM (optional)
+    end_time = Column(String(5), nullable=True)      # HH:MM (optional)
+    content = Column(String(1000), nullable=False)
+    color = Column(String(20), nullable=True, default="#3b82f6")

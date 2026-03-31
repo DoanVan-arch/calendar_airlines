@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List
 
 from ..database import get_db
-from ..models import Aircraft, Registration
+from ..models import Aircraft, FlightSector, Registration
 from ..schemas import AircraftCreate, AircraftUpdate, AircraftOut
 
 router = APIRouter()
@@ -20,14 +20,21 @@ def list_aircraft(db: Session = Depends(get_db)):
             "name": ac.name,
             "ac_type": ac.ac_type,
             "line_order": ac.line_order,
-            "registration_info": None
+            "color": ac.color,
+            "registration_id": ac.registration_id,
+            "registration_info": None,
         }
-        # Try to find matching registration details
-        reg = db.query(Registration).filter(Registration.registration == ac.registration).first()
+        # If registration_id is set, look up by id; otherwise fall back to matching by registration string
+        reg = None
+        if ac.registration_id:
+            reg = db.query(Registration).filter(Registration.id == ac.registration_id).first()
+        if not reg:
+            reg = db.query(Registration).filter(Registration.registration == ac.registration).first()
         if reg:
             ac_dict["registration_info"] = {
                 "aircraft_model": reg.aircraft_model,
-                "seats": reg.seats
+                "seats": reg.seats,
+                "dw_type": reg.dw_type,
             }
         result.append(ac_dict)
     return result
@@ -45,6 +52,8 @@ def create_aircraft(payload: AircraftCreate, db: Session = Depends(get_db)):
         name=payload.name,
         ac_type=payload.ac_type,
         line_order=payload.line_order if payload.line_order else max_order,
+        color=payload.color,
+        registration_id=payload.registration_id,
     )
     db.add(ac)
     db.commit()
@@ -57,7 +66,8 @@ def update_aircraft(aircraft_id: int, payload: AircraftUpdate, db: Session = Dep
     ac = db.query(Aircraft).filter(Aircraft.id == aircraft_id).first()
     if not ac:
         raise HTTPException(404, "Aircraft not found")
-    for field, value in payload.model_dump(exclude_none=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    for field, value in data.items():
         setattr(ac, field, value)
     db.commit()
     db.refresh(ac)
@@ -69,6 +79,8 @@ def delete_aircraft(aircraft_id: int, db: Session = Depends(get_db)):
     ac = db.query(Aircraft).filter(Aircraft.id == aircraft_id).first()
     if not ac:
         raise HTTPException(404, "Aircraft not found")
+    # Delete all sectors belonging to this aircraft first
+    db.query(FlightSector).filter(FlightSector.aircraft_id == aircraft_id).delete()
     db.delete(ac)
     db.commit()
 

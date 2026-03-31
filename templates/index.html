@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PikA - Pickleball Airways</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=9" />
+  <link rel="stylesheet" href="/static/css/style.css?v=18" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
 </head>
 <body>
@@ -21,6 +21,18 @@
     <input type="date" id="currentDate" />
     <button class="icon-btn" id="btnNextPeriod" title="Kỳ sau"><i class="fas fa-chevron-right"></i></button>
     <span class="date-label" id="dateLabel"></span>
+    <div class="days-shown-ctrl" id="daysShownCtrl" title="Số ngày hiển thị trên Gantt">
+      <label for="daysShownSelect"><i class="fas fa-calendar-week"></i></label>
+      <select id="daysShownSelect">
+        <option value="1">1 ngày</option>
+        <option value="2">2 ngày</option>
+        <option value="3" selected>3 ngày</option>
+        <option value="5">5 ngày</option>
+        <option value="7">7 ngày</option>
+        <option value="14">14 ngày</option>
+        <option value="30">30 ngày</option>
+      </select>
+    </div>
   </div>
 
   <div class="header-view-toggle">
@@ -67,6 +79,13 @@
 
   <!-- Gantt chart area (Day view) -->
   <div class="gantt-wrapper" id="ganttWrapper">
+    <!-- Zoom indicator -->
+    <div class="gantt-zoom-ctrl" id="ganttZoomCtrl">
+      <button class="zoom-btn" id="btnZoomOut" title="Thu nhỏ"><i class="fas fa-search-minus"></i></button>
+      <span class="zoom-pct" id="zoomIndicator" title="Ctrl+Scroll để zoom">100%</span>
+      <button class="zoom-btn" id="btnZoomIn" title="Phóng to"><i class="fas fa-search-plus"></i></button>
+      <button class="zoom-btn" id="btnZoomReset" title="Đặt lại zoom"><i class="fas fa-compress-arrows-alt"></i></button>
+    </div>
     <!-- Ruler + rows rendered by JS -->
     <div class="gantt-label-col" id="ganttLabelCol"></div>
     <div class="gantt-scroll-area" id="ganttScrollArea">
@@ -121,6 +140,40 @@
           <input type="date" id="sectorDate" />
         </div>
       </div>
+      <!-- Repeat mode (new sectors only) -->
+      <div class="form-row" id="sectorRepeatToggleRow">
+        <div class="form-group">
+          <label class="checkbox-label" style="margin-top:4px;">
+            <input type="checkbox" id="sectorRepeatMode" />
+            Thêm nhiều ngày (giai đoạn)
+          </label>
+        </div>
+      </div>
+      <!-- Repeat panel (hidden by default) -->
+      <div id="sectorRepeatPanel" class="hidden">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Từ ngày</label>
+            <input type="date" id="sectorDateFrom" />
+          </div>
+          <div class="form-group">
+            <label>Đến ngày</label>
+            <input type="date" id="sectorDateTo" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Các ngày trong tuần</label>
+          <div class="dow-checkboxes">
+            <label class="checkbox-label"><input type="checkbox" class="dow-cb" value="1" checked /> T2</label>
+            <label class="checkbox-label"><input type="checkbox" class="dow-cb" value="2" checked /> T3</label>
+            <label class="checkbox-label"><input type="checkbox" class="dow-cb" value="3" checked /> T4</label>
+            <label class="checkbox-label"><input type="checkbox" class="dow-cb" value="4" checked /> T5</label>
+            <label class="checkbox-label"><input type="checkbox" class="dow-cb" value="5" checked /> T6</label>
+            <label class="checkbox-label"><input type="checkbox" class="dow-cb" value="6" checked /> T7</label>
+            <label class="checkbox-label"><input type="checkbox" class="dow-cb" value="0" checked /> CN</label>
+          </div>
+        </div>
+      </div>
       <div class="form-row">
         <div class="form-group">
           <label>Điểm đi *</label>
@@ -159,7 +212,10 @@
         </div>
         <div class="form-group">
           <label>Số hiệu chuyến</label>
-          <input type="text" id="sectorFlightNum" placeholder="VN123" class="uppercase" />
+          <div class="input-prefix-wrap">
+            <span class="input-prefix">VU</span>
+            <input type="text" id="sectorFlightNum" placeholder="123" maxlength="6" style="border-radius:0 6px 6px 0;" />
+          </div>
         </div>
       </div>
       <div class="form-row">
@@ -190,7 +246,14 @@
     <div class="modal-body">
       <input type="hidden" id="aircraftId" />
       <div class="form-group">
-        <label>Số hiệu tàu (Reg) *</label>
+        <label>Registration *</label>
+        <select id="aircraftRegSelect">
+          <option value="">TẠM (không liên kết)</option>
+        </select>
+        <small style="color:var(--text-muted);font-size:11px;">Chọn để tự động điền số hiệu và loại máy bay</small>
+      </div>
+      <div class="form-group" id="regFreeTextGroup" style="display:none;">
+        <label>Số hiệu tàu (nhập tay) *</label>
         <input type="text" id="aircraftReg" placeholder="VN-A123" class="uppercase" />
       </div>
       <div class="form-group">
@@ -302,9 +365,11 @@
       <div class="tab-content" id="tabRegistration">
         <div class="table-toolbar">
           <button class="btn btn-success btn-sm admin-only" id="btnAddReg"><i class="fas fa-plus"></i> Thêm</button>
+          <button class="btn btn-secondary btn-sm" id="btnExportRegExcel"><i class="fas fa-file-excel"></i> Xuất Excel</button>
+          <button class="btn btn-secondary btn-sm" id="btnExportRegCsv"><i class="fas fa-file-csv"></i> Xuất CSV</button>
         </div>
         <table class="data-table" id="regTable">
-          <thead><tr><th>Số đăng bạ</th><th>Mẫu máy bay</th><th>Số ghế</th><th class="admin-only"></th></tr></thead>
+          <thead><tr><th>Số đăng bạ</th><th>Mẫu máy bay</th><th>Số ghế</th><th>D/W</th><th class="admin-only"></th></tr></thead>
           <tbody id="regTableBody"></tbody>
         </table>
         <div class="inline-form hidden" id="regForm">
@@ -312,6 +377,11 @@
           <input type="text" id="regNumber" placeholder="VN-A123" class="uppercase" style="width:120px" />
           <input type="text" id="regModel" placeholder="Airbus 321" style="flex:1" />
           <input type="number" id="regSeats" min="1" max="600" placeholder="200" style="width:80px" />
+          <select id="regDW" style="width:80px">
+            <option value="">-</option>
+            <option value="Dry">Dry</option>
+            <option value="Wet">Wet</option>
+          </select>
           <button class="btn btn-primary btn-sm" id="btnSaveReg">Lưu</button>
           <button class="btn btn-secondary btn-sm" id="btnCancelReg">Huỷ</button>
         </div>
@@ -377,6 +447,7 @@
       </div>
       <button class="btn btn-primary" id="btnRunExport"><i class="fas fa-search"></i> Xem</button>
       <button class="btn btn-secondary" id="btnDownloadTT"><i class="fas fa-download"></i> Tải JSON</button>
+      <button class="btn btn-secondary" id="btnDownloadExcel"><i class="fas fa-file-excel"></i> Tải Excel</button>
       <div class="export-result" id="exportResult"></div>
     </div>
   </div>
@@ -472,6 +543,16 @@
         <div class="form-group">
           <label>Đến ngày <span class="required">*</span></label>
           <input type="date" id="mxEndDate" />
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Giờ bắt đầu (UTC) <span class="hint-text">tuỳ chọn</span></label>
+          <input type="time" id="mxStartTime" placeholder="HH:MM" />
+        </div>
+        <div class="form-group">
+          <label>Giờ kết thúc (UTC) <span class="hint-text">tuỳ chọn</span></label>
+          <input type="time" id="mxEndTime" placeholder="HH:MM" />
         </div>
       </div>
       <div class="form-group">
@@ -581,6 +662,7 @@
     <li id="acCmSwap"><i class="fas fa-exchange-alt"></i> Hoán đổi tuyến...</li>
     <li id="acCmCopy"><i class="fas fa-copy"></i> Copy cả line</li>
     <li id="acCmEdit"><i class="fas fa-edit"></i> Chỉnh sửa tàu bay</li>
+    <li id="acCmDelete" class="danger"><i class="fas fa-trash"></i> Xoá tàu bay</li>
   </ul>
 </div>
 
@@ -707,10 +789,6 @@
       <p class="hint-text" id="pasteSummary"></p>
       <div class="paste-preview" id="pastePreviewList"></div>
       <div class="form-group" style="margin-top:12px;">
-        <label>Ngày đích <span class="required">*</span></label>
-        <input type="date" id="pasteDate" />
-      </div>
-      <div class="form-group">
         <label>Tàu bay đích <span class="required">*</span></label>
         <select id="pasteAircraftId"></select>
       </div>
@@ -720,12 +798,89 @@
           Xóa chặng hiện tại của tàu đích trước khi paste
         </label>
       </div>
+      <!-- Single date mode -->
+      <div id="pasteSingleDateSection">
+        <div class="form-group">
+          <label>Ngày đích <span class="required">*</span></label>
+          <input type="date" id="pasteDate" />
+        </div>
+      </div>
+      <!-- Multi-day repeat toggle -->
+      <div class="form-group" style="margin-top:4px;">
+        <label class="checkbox-label">
+          <input type="checkbox" id="pasteMultiMode" />
+          Paste nhiều ngày (lặp lại theo khoảng ngày)
+        </label>
+      </div>
+      <!-- Multi-day section (hidden by default) -->
+      <div id="pasteMultiSection" class="hidden" style="border:1px solid var(--border);border-radius:6px;padding:10px;margin-top:6px;">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Từ ngày <span class="required">*</span></label>
+            <input type="date" id="pasteMultiFrom" />
+          </div>
+          <div class="form-group">
+            <label>Đến ngày <span class="required">*</span></label>
+            <input type="date" id="pasteMultiTo" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Ngày trong tuần</label>
+          <div class="dow-selector" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">
+            <label class="dow-label"><input type="checkbox" class="paste-dow-cb" value="1" checked /> T2</label>
+            <label class="dow-label"><input type="checkbox" class="paste-dow-cb" value="2" checked /> T3</label>
+            <label class="dow-label"><input type="checkbox" class="paste-dow-cb" value="3" checked /> T4</label>
+            <label class="dow-label"><input type="checkbox" class="paste-dow-cb" value="4" checked /> T5</label>
+            <label class="dow-label"><input type="checkbox" class="paste-dow-cb" value="5" checked /> T6</label>
+            <label class="dow-label"><input type="checkbox" class="paste-dow-cb" value="6" checked /> T7</label>
+            <label class="dow-label"><input type="checkbox" class="paste-dow-cb" value="0" checked /> CN</label>
+          </div>
+        </div>
+        <p class="hint-text" id="pasteMultiPreviewCount" style="margin-top:4px;"></p>
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" data-close="pasteModalOverlay">Huỷ</button>
       <button class="btn btn-primary" id="btnConfirmPaste">
         <i class="fas fa-paste"></i> Paste
       </button>
+    </div>
+  </div>
+</div>
+
+<!-- Note editor modal -->
+<div class="modal-overlay hidden" id="noteModalOverlay">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2 id="noteModalTitle"><i class="fas fa-sticky-note"></i> Ghi chú</h2>
+      <button class="close-btn" data-close="noteModalOverlay"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="noteId" />
+      <input type="hidden" id="noteDate" />
+      <div class="form-group">
+        <label>Nội dung <span class="required">*</span></label>
+        <textarea id="noteContent" rows="3" placeholder="Nhập ghi chú..." style="width:100%;resize:vertical;"></textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Giờ bắt đầu</label>
+          <input type="time" id="noteStartTime" />
+        </div>
+        <div class="form-group">
+          <label>Giờ kết thúc</label>
+          <input type="time" id="noteEndTime" />
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Màu</label>
+        <input type="color" id="noteColor" value="#3b82f6" style="width:60px;height:32px;cursor:pointer;" />
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-danger btn-sm hidden" id="btnDeleteNote"><i class="fas fa-trash"></i> Xoá</button>
+      <button class="btn btn-secondary" data-close="noteModalOverlay">Huỷ</button>
+      <button class="btn btn-primary" id="btnSaveNote"><i class="fas fa-save"></i> Lưu</button>
     </div>
   </div>
 </div>
@@ -746,9 +901,10 @@
   </div>
 </div>
 
-<script src="/static/js/api.js?v=9"></script>
-<script src="/static/js/history.js?v=9"></script>
-<script src="/static/js/gantt.js?v=9"></script>
-<script src="/static/js/app.js?v=9"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<script src="/static/js/api.js?v=18"></script>
+<script src="/static/js/history.js?v=18"></script>
+<script src="/static/js/gantt.js?v=18"></script>
+<script src="/static/js/app.js?v=18"></script>
 </body>
 </html>

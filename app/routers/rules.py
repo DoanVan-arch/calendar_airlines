@@ -2,7 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List
+import csv
 import io
+import datetime
 import openpyxl
 
 from ..database import get_db
@@ -194,9 +196,24 @@ def minutes_to_decimal(minutes: int) -> str:
     return f"{h:02d},{frac:02d}"
 
 
-def hhmm_to_minutes(hhmm: str) -> int:
-    h, m = map(int, hhmm.split(':'))
-    return h * 60 + m
+def hhmm_to_minutes(value) -> int:
+    """Convert various representations of a time duration to total minutes.
+
+    openpyxl may return a cell value as:
+      - str  "01:30"  → 90 min
+      - datetime.time  → hours*60 + minutes
+      - float (Excel serial fraction of a day, e.g. 0.0625 = 1h30m) → *1440
+    """
+    if isinstance(value, datetime.time):
+        return value.hour * 60 + value.minute
+    if isinstance(value, (int, float)):
+        # Excel stores time as fraction of 24h
+        total_minutes = round(float(value) * 24 * 60)
+        return total_minutes
+    # fallback: treat as "HH:MM" string
+    text = str(value).strip()
+    parts = text.replace(",", ":").split(":")
+    return int(parts[0]) * 60 + int(parts[1])
 
 
 @router.get("/tat/export")
@@ -333,7 +350,7 @@ def create_registration(payload: RegistrationCreate, db: Session = Depends(get_d
     existing = db.query(Registration).filter(Registration.registration == reg).first()
     if existing:
         raise HTTPException(400, f"Registration '{reg}' already exists")
-    r = Registration(registration=reg, aircraft_model=payload.aircraft_model, seats=payload.seats)
+    r = Registration(registration=reg, aircraft_model=payload.aircraft_model, seats=payload.seats, dw_type=payload.dw_type)
     db.add(r)
     db.commit()
     db.refresh(r)
@@ -359,3 +376,51 @@ def delete_registration(reg_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Registration not found")
     db.delete(r)
     db.commit()
+
+
+@router.get("/registration/export/excel")
+def export_registration_excel(db: Session = Depends(get_db)):
+    regs = db.query(Registration).order_by(Registration.registration).all()
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Registrations"
+
+    ws.append(["Số đăng bạ", "Mẫu máy bay", "Số ghế", "D/W"])
+    for r in regs:
+        ws.append([r.registration, r.aircraft_model, r.seats, r.dw_type or ""])
+
+    for col in ws.columns:
+        max_length = 0
+        for cell in col:
+            if cell.value:
+                max_length = max(max_length, len(str(cell.value)))
+        ws.column_dimensions[col[0].column_letter].width = max_length + 2
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=registrations.xlsx"},
+    )
+
+
+@router.get("/registration/export/csv")
+def export_registration_csv(db: Session = Depends(get_db)):
+    regs = db.query(Registration).order_by(Registration.registration).all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Số đăng bạ", "Mẫu máy bay", "Số ghế", "D/W"])
+    for r in regs:
+        writer.writerow([r.registration, r.aircraft_model, r.seats, r.dw_type or ""])
+
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=registrations.csv"},
+    )
