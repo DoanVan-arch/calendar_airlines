@@ -189,8 +189,14 @@ input[type="date"] {
 }
 input[type="date"]:focus { outline: none; border-color: var(--accent); }
 
-/* Force 24h time display — hide AM/PM field in Chromium browsers */
-input[type="time"]::-webkit-datetime-edit-ampm-field { display: none !important; }
+/* 24h time text inputs — consistent across all browsers/locales */
+.time-input-24h {
+  font-family: var(--font);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 1px;
+  text-align: center;
+  width: 80px;
+}
 
 /* ── Toolbar ───────────────────────────────────────────────────────────────── */
 .toolbar {
@@ -593,6 +599,14 @@ input[type="time"]::-webkit-datetime-edit-ampm-field { display: none !important;
 
 .sector-block.has-warning { border-color: var(--warning) !important; box-shadow: 0 0 6px rgba(227,179,65,0.5); }
 .sector-block.has-error   { border-color: var(--danger)  !important; box-shadow: 0 0 6px rgba(218,54,51,0.5); }
+
+/* Overlap-blocked visual: red border + pulsing glow during time-drag */
+.sector-block.overlap-blocked {
+  border: 2px solid var(--danger) !important;
+  box-shadow: 0 0 12px rgba(218,54,51,0.7) !important;
+  opacity: 0.75;
+  cursor: not-allowed !important;
+}
 
 /* Next-day sectors now look identical to day-0 sectors */
 

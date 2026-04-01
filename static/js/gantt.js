@@ -809,12 +809,16 @@ class GanttChart {
       const snappedDelta = Math.round(minDelta / 5) * 5;
 
       let newDepMin = startDepMin + snappedDelta;
-      // Clamp within 25h canvas
+      // Clamp within canvas
       newDepMin = Math.max(0, Math.min(MINUTES_TOTAL() - btMin, newDepMin));
 
       const newArrMin = newDepMin + btMin;
       const newDepUtc = minToTime(newDepMin);
       const newArrUtc = minToTime(newArrMin);
+
+      // Check overlap with other sectors on the same row
+      const overlap = this._checkTimeDragOverlap(sector, newDepMin, newArrMin);
+      el.classList.toggle("overlap-blocked", overlap);
 
       // Update element position live
       el.style.left  = (newDepMin * PX_PER_MIN) + "px";
@@ -835,10 +839,25 @@ class GanttChart {
       const { sector, el, _currentDepUtc, _currentArrUtc, activated, _snappedDelta } = this._timeDrag;
 
       el.classList.remove("time-dragging");
+      el.classList.remove("overlap-blocked");
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
       this._hideTimeDragTooltip();
       this._timeDrag = null;
+
+      // Block commit if overlap was detected
+      if (activated && el.dataset.overlapBlocked === "1") {
+        // Reset position
+        const dOff = sector._dayOffset || 0;
+        const origDep = timeToMin(sector.dep_utc) + dOff * MINUTES_PER_DAY;
+        let origArr = timeToMin(sector.arr_utc) + dOff * MINUTES_PER_DAY;
+        if (origArr <= origDep) origArr += 1440;
+        el.style.left  = (origDep * PX_PER_MIN) + "px";
+        el.style.width = ((origArr - origDep) * PX_PER_MIN) + "px";
+        delete el.dataset.overlapBlocked;
+        this._timeDragOccurred = false;
+        return;
+      }
 
       // Only save if drag was activated and position actually moved
       if (activated && _currentDepUtc && _currentDepUtc !== sector.dep_utc && this.onTimeChange) {
@@ -917,6 +936,30 @@ class GanttChart {
   _hideTimeDragTooltip() {
     const tip = document.getElementById("_ganttTimeDragTip");
     if (tip) { tip.classList.remove("visible"); tip.style.display = "none"; }
+  }
+
+  // ── Overlap check for time-drag (same aircraft row) ─────────────────────────
+  _checkTimeDragOverlap(draggedSector, newDepMin, newArrMin) {
+    const acId = draggedSector.aircraft_id;
+    const sectors = this._sectors.filter(
+      s => s.aircraft_id === acId && s.status === "active" && s.id !== draggedSector.id
+    );
+    for (const s of sectors) {
+      const dayOff = s._dayOffset !== undefined ? s._dayOffset : 0;
+      const sDep = timeToMin(s.dep_utc) + dayOff * MINUTES_PER_DAY;
+      let   sArr = timeToMin(s.arr_utc) + dayOff * MINUTES_PER_DAY;
+      if (sArr <= sDep) sArr += MINUTES_PER_DAY;
+      // Overlap: [a,b) ∩ [c,d) ≠ ∅  ↔  a < d && c < b
+      if (newDepMin < sArr && sDep < newArrMin) {
+        // Tag the element so mouseup can detect it
+        const el = this._timeDrag && this._timeDrag.el;
+        if (el) el.dataset.overlapBlocked = "1";
+        return true;
+      }
+    }
+    const el = this._timeDrag && this._timeDrag.el;
+    if (el) delete el.dataset.overlapBlocked;
+    return false;
   }
 
   // ── Drag-drop handlers (cross-row: move to another aircraft) ────────────────

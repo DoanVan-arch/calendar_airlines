@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PikA - Pickleball Airways</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=18" />
+  <link rel="stylesheet" href="/static/css/style.css?v=19" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
 </head>
 <body>
@@ -196,12 +196,12 @@
       <div class="form-row">
         <div class="form-group">
           <label id="sectorDepLabel">Giờ cất cánh (UTC) *</label>
-          <input type="time" id="sectorDep" />
+          <input type="text" id="sectorDep" placeholder="HH:MM" maxlength="5" pattern="\d{2}:\d{2}" class="time-input-24h" />
           <small id="sectorDepHint" class="hint convert-hint"></small>
         </div>
         <div class="form-group">
           <label id="sectorArrLabel">Giờ hạ cánh (UTC)</label>
-          <input type="time" id="sectorArr" />
+          <input type="text" id="sectorArr" placeholder="HH:MM" maxlength="5" pattern="\d{2}:\d{2}" class="time-input-24h" />
           <small id="sectorArrHint" class="hint convert-hint"></small>
         </div>
       </div>
@@ -304,10 +304,10 @@
           <div class="mass-tat-title"><i class="fas fa-globe"></i> Rule mặc định (áp dụng cho cảng chưa được cài đặt riêng)</div>
           <div class="mass-tat-fields">
             <label>Nội địa:
-              <input type="time" id="massTATDomestic" value="00:40" />
+              <input type="text" id="massTATDomestic" value="00:40" placeholder="HH:MM" maxlength="5" class="time-input-24h" />
             </label>
             <label>Quốc tế:
-              <input type="time" id="massTATIntl" value="01:00" />
+              <input type="text" id="massTATIntl" value="01:00" placeholder="HH:MM" maxlength="5" class="time-input-24h" />
             </label>
             <button class="btn btn-primary btn-sm admin-only" id="btnSaveMassTAT">Lưu mặc định</button>
           </div>
@@ -548,11 +548,11 @@
       <div class="form-row">
         <div class="form-group">
           <label>Giờ bắt đầu (UTC) <span class="hint-text">tuỳ chọn</span></label>
-          <input type="time" id="mxStartTime" placeholder="HH:MM" />
+          <input type="text" id="mxStartTime" placeholder="HH:MM" maxlength="5" class="time-input-24h" />
         </div>
         <div class="form-group">
           <label>Giờ kết thúc (UTC) <span class="hint-text">tuỳ chọn</span></label>
-          <input type="time" id="mxEndTime" placeholder="HH:MM" />
+          <input type="text" id="mxEndTime" placeholder="HH:MM" maxlength="5" class="time-input-24h" />
         </div>
       </div>
       <div class="form-group">
@@ -689,7 +689,7 @@
       </div>
       <div class="form-group">
         <label>TAT tối thiểu <span class="required">*</span></label>
-        <input type="time" id="tatTime" placeholder="00:40" />
+        <input type="text" id="tatTime" placeholder="00:40" maxlength="5" class="time-input-24h" />
       </div>
     </div>
     <div class="modal-footer">
@@ -718,7 +718,7 @@
       </div>
       <div class="form-group">
         <label>Block time <span class="required">*</span></label>
-        <input type="time" id="btTime" placeholder="01:30" />
+        <input type="text" id="btTime" placeholder="01:30" maxlength="5" class="time-input-24h" />
       </div>
     </div>
     <div class="modal-footer">
@@ -865,11 +865,11 @@
       <div class="form-row">
         <div class="form-group">
           <label>Giờ bắt đầu</label>
-          <input type="time" id="noteStartTime" />
+          <input type="text" id="noteStartTime" placeholder="HH:MM" maxlength="5" class="time-input-24h" />
         </div>
         <div class="form-group">
           <label>Giờ kết thúc</label>
-          <input type="time" id="noteEndTime" />
+          <input type="text" id="noteEndTime" placeholder="HH:MM" maxlength="5" class="time-input-24h" />
         </div>
       </div>
       <div class="form-group">
@@ -902,9 +902,9 @@
 </div>
 
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-<script src="/static/js/api.js?v=18"></script>
-<script src="/static/js/history.js?v=18"></script>
-<script src="/static/js/gantt.js?v=18"></script>
-<script src="/static/js/app.js?v=18"></script>
+<script src="/static/js/api.js?v=19"></script>
+<script src="/static/js/history.js?v=19"></script>
+<script src="/static/js/gantt.js?v=19"></script>
+<script src="/static/js/app.js?v=19"></script>
 </body>
 </html>

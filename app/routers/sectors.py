@@ -42,6 +42,40 @@ def minutes_to_hhmm(m: int) -> str:
     return f"{m // 60:02d}:{m % 60:02d}"
 
 
+def _check_overlap(db: Session, aircraft_id: int, flight_date: str,
+                   dep_utc: str, arr_utc: str, exclude_id: Optional[int] = None):
+    """Raise HTTPException if the proposed sector overlaps any existing active
+    sector on the same aircraft & date."""
+    dep_min = time_to_minutes(dep_utc)
+    arr_min = time_to_minutes(arr_utc)
+    if arr_min <= dep_min:
+        arr_min += 1440  # overnight
+
+    existing = (
+        db.query(FlightSector)
+        .filter(
+            FlightSector.aircraft_id == aircraft_id,
+            FlightSector.flight_date == flight_date,
+            FlightSector.status == "active",
+        )
+        .all()
+    )
+    for s in existing:
+        if exclude_id and s.id == exclude_id:
+            continue
+        s_dep = time_to_minutes(s.dep_utc)
+        s_arr = time_to_minutes(s.arr_utc)
+        if s_arr <= s_dep:
+            s_arr += 1440
+        # Overlap check: two intervals [a,b) and [c,d) overlap iff a < d and c < b
+        if dep_min < s_arr and s_dep < arr_min:
+            raise HTTPException(
+                409,
+                f"Chặng bay bị trùng thời gian với {s.origin}→{s.destination} "
+                f"({s.dep_utc}–{s.arr_utc}) trên cùng tàu bay."
+            )
+
+
 def add_tz(hhmm: str, offset_hours: float) -> str:
     mins = time_to_minutes(hhmm) + int(offset_hours * 60)
     return minutes_to_hhmm(mins)
@@ -81,6 +115,8 @@ def create_sector(request: Request, payload: FlightSectorCreate, db: Session = D
     ac = db.query(Aircraft).filter(Aircraft.id == payload.aircraft_id).first()
     if not ac:
         raise HTTPException(404, "Aircraft not found")
+    _check_overlap(db, payload.aircraft_id, payload.flight_date,
+                   payload.dep_utc, payload.arr_utc)
     sector = FlightSector(**payload.model_dump())
     db.add(sector)
     db.commit()
@@ -94,7 +130,17 @@ def update_sector(request: Request, sector_id: int, payload: FlightSectorUpdate,
     sector = db.query(FlightSector).filter(FlightSector.id == sector_id).first()
     if not sector:
         raise HTTPException(404, "Sector not found")
-    for field, value in payload.model_dump(exclude_none=True).items():
+    # Apply updates to determine final values for overlap check
+    updates = payload.model_dump(exclude_none=True)
+    ac_id = updates.get("aircraft_id", sector.aircraft_id)
+    f_date = updates.get("flight_date", sector.flight_date)
+    dep = updates.get("dep_utc", sector.dep_utc)
+    arr = updates.get("arr_utc", sector.arr_utc)
+    status = updates.get("status", sector.status)
+    # Only check overlap for active sectors
+    if status == "active" and dep and arr:
+        _check_overlap(db, ac_id, f_date, dep, arr, exclude_id=sector_id)
+    for field, value in updates.items():
         setattr(sector, field, value)
     db.commit()
     db.refresh(sector)
@@ -299,37 +345,103 @@ def get_warnings(
                         ),
                     })
 
-        # 3. Overnight continuity – compare with next day's first sector
-        try:
-            next_date = (datetime.strptime(date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-        except ValueError:
-            continue
+        # ── Cross-day checks ──────────────────────────────────────────────
+        # Find the most recent previous sector (any date before today)
+        # and the earliest next sector (any date after today) for this aircraft.
+        # This handles gaps of 2+ days between sectors.
 
-        next_day_sectors = (
-            db.query(FlightSector)
-            .filter(
-                FlightSector.aircraft_id == ac.id,
-                FlightSector.flight_date == next_date,
-                FlightSector.status == "active",
+        current_date_obj = datetime.strptime(date, "%Y-%m-%d")
+
+        if sectors:
+            # --- Previous sector → today's first sector ---
+            prev_sector = (
+                db.query(FlightSector)
+                .filter(
+                    FlightSector.aircraft_id == ac.id,
+                    FlightSector.flight_date < date,
+                    FlightSector.status == "active",
+                )
+                .order_by(FlightSector.flight_date.desc(), FlightSector.arr_utc.desc())
+                .first()
             )
-            .order_by(FlightSector.dep_utc)
-            .all()
-        )
 
-        if sectors and next_day_sectors:
-            last_dest = sectors[-1].destination
-            next_origin = next_day_sectors[0].origin
-            if last_dest != next_origin:
-                warnings.append({
-                    "type": "CONTINUITY",
-                    "severity": "error",
-                    "sector_id": sectors[-1].id,
-                    "next_sector_id": next_day_sectors[0].id,
-                    "aircraft": ac.registration,
-                    "message": (
-                        f"{ac.registration} | Continuity break: Day {date} ends at "
-                        f"{last_dest} but Day {next_date} starts from {next_origin}"
-                    ),
-                })
+            if prev_sector:
+                first_today = sectors[0]
+                prev_date_obj = datetime.strptime(prev_sector.flight_date, "%Y-%m-%d")
+                day_diff = (current_date_obj - prev_date_obj).days  # always >= 1
+
+                # TAT gap: arrival on prev_date → departure on current date
+                arr_min = time_to_minutes(prev_sector.arr_utc)
+                dep_min = time_to_minutes(first_today.dep_utc)
+                gap = (day_diff * 1440) - arr_min + dep_min
+
+                min_tat = tat_map.get(prev_sector.destination, None)
+                if min_tat is None:
+                    tz = airport_tz.get(prev_sector.destination, 0)
+                    min_tat = default_tat_domestic if tz == 7 else default_tat_intl
+
+                if gap < min_tat:
+                    warnings.append({
+                        "type": "TAT",
+                        "severity": "error",
+                        "sector_id": prev_sector.id,
+                        "next_sector_id": first_today.id,
+                        "aircraft": ac.registration,
+                        "message": (
+                            f"{ac.registration} | TAT at {prev_sector.destination} is {gap} min "
+                            f"(minimum {min_tat} min) between "
+                            f"{prev_sector.origin}→{prev_sector.destination} "
+                            f"({prev_sector.flight_date} arr {prev_sector.arr_utc}) "
+                            f"and {first_today.origin}→{first_today.destination} "
+                            f"({first_today.flight_date} dep {first_today.dep_utc})"
+                        ),
+                    })
+
+                # Base mismatch: prev destination ≠ today's first origin
+                if prev_sector.destination != first_today.origin:
+                    warnings.append({
+                        "type": "CONTINUITY",
+                        "severity": "error",
+                        "sector_id": prev_sector.id,
+                        "next_sector_id": first_today.id,
+                        "aircraft": ac.registration,
+                        "message": (
+                            f"{ac.registration} | Continuity break: {prev_sector.flight_date} "
+                            f"ends at {prev_sector.destination} but {date} starts from "
+                            f"{first_today.origin}"
+                        ),
+                    })
+
+            # --- Today's last sector → next future sector ---
+            next_sector = (
+                db.query(FlightSector)
+                .filter(
+                    FlightSector.aircraft_id == ac.id,
+                    FlightSector.flight_date > date,
+                    FlightSector.status == "active",
+                )
+                .order_by(FlightSector.flight_date.asc(), FlightSector.dep_utc.asc())
+                .first()
+            )
+
+            if next_sector:
+                last_today = sectors[-1]
+                next_date_obj = datetime.strptime(next_sector.flight_date, "%Y-%m-%d")
+                day_diff = (next_date_obj - current_date_obj).days  # always >= 1
+
+                # Base mismatch: today's last destination ≠ next sector origin
+                if last_today.destination != next_sector.origin:
+                    warnings.append({
+                        "type": "CONTINUITY",
+                        "severity": "error",
+                        "sector_id": last_today.id,
+                        "next_sector_id": next_sector.id,
+                        "aircraft": ac.registration,
+                        "message": (
+                            f"{ac.registration} | Continuity break: {date} ends at "
+                            f"{last_today.destination} but {next_sector.flight_date} "
+                            f"starts from {next_sector.origin}"
+                        ),
+                    })
 
     return {"date": date, "warnings": warnings}

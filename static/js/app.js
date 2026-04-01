@@ -70,6 +70,31 @@ function formatBH(minutes) {
   return `${h}h${String(m).padStart(2,"0")}m`;
 }
 
+/**
+ * Check if a proposed sector overlaps any existing active sector
+ * on the same aircraft & date. Returns true if overlap found.
+ */
+function _checkSectorOverlap(acId, date, depUtc, arrUtc, excludeId) {
+  const pool = state.allSectors || state.sectors || [];
+  const depMin = timeToMin(depUtc);
+  let arrMin = timeToMin(arrUtc);
+  if (arrMin <= depMin) arrMin += 1440;
+
+  for (const s of pool) {
+    if (s.aircraft_id !== acId) continue;
+    if (s.status !== "active") continue;
+    if (s.flight_date !== date) continue;
+    if (excludeId && s.id === excludeId) continue;
+
+    const sDep = timeToMin(s.dep_utc);
+    let sArr = timeToMin(s.arr_utc);
+    if (sArr <= sDep) sArr += 1440;
+
+    if (depMin < sArr && sDep < arrMin) return true;
+  }
+  return false;
+}
+
 function downloadJSON(data, filename) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const url  = URL.createObjectURL(blob);
@@ -1129,6 +1154,13 @@ async function saveSector() {
   }
 
   const sectorColor = doc("sectorColor").dataset.hasColor === "1" ? doc("sectorColor").value : null;
+
+  // ── Overlap check (frontend) ──────────────────────────────────────────
+  const editId = id ? parseInt(id, 10) : null;
+  if (_checkSectorOverlap(acId, date, dep, arr, editId)) {
+    alert("Chặng bay bị trùng thời gian với chặng khác trên cùng tàu bay. Không thể lưu.");
+    return;
+  }
 
   try {
     if (id) {
@@ -2655,6 +2687,28 @@ document.addEventListener("edit-aircraft", e => openAircraftModal(e.detail));
 
 // ─── Main UI bindings ─────────────────────────────────────────────────────────
 function bindUI() {
+  // ── 24h time input auto-format for all .time-input-24h fields ────────────
+  document.querySelectorAll(".time-input-24h").forEach(inp => {
+    inp.addEventListener("input", e => {
+      let v = e.target.value.replace(/[^\d]/g, ""); // digits only
+      if (v.length >= 3) v = v.slice(0, 2) + ":" + v.slice(2, 4);
+      if (v.length > 5) v = v.slice(0, 5);
+      e.target.value = v;
+    });
+    inp.addEventListener("blur", e => {
+      const v = e.target.value.trim();
+      if (!v) return;
+      const m = v.match(/^(\d{1,2}):?(\d{2})$/);
+      if (m) {
+        const h = Math.min(23, parseInt(m[1], 10));
+        const min = Math.min(59, parseInt(m[2], 10));
+        e.target.value = String(h).padStart(2, "0") + ":" + String(min).padStart(2, "0");
+      } else {
+        e.target.value = "";
+      }
+    });
+  });
+
   // Header navigation
   doc("btnPrevPeriod").addEventListener("click", () => navigateDate(-1));
   doc("btnNextPeriod").addEventListener("click", () => navigateDate(+1));
