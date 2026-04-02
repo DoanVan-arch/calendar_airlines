@@ -29,6 +29,7 @@ class Registration(Base):
     aircraft_model = Column(String(100), nullable=False)  # Airbus 321
     seats = Column(Integer, nullable=False)  # 200
     dw_type = Column(String(10), nullable=True)  # "Dry", "Wet", or None
+    mtow = Column(Float, nullable=True)  # Maximum Take-Off Weight (tonnes)
 
 
 class FlightSector(Base):
@@ -53,6 +54,7 @@ class BlockTimeRule(Base):
     origin = Column(String(10), nullable=False)
     destination = Column(String(10), nullable=False)
     block_time_minutes = Column(Integer, nullable=False)
+    ats = Column(String(100), nullable=True)  # ATS route (đường bay không lưu)
 
 
 class TATRule(Base):
@@ -111,10 +113,11 @@ class AuditLog(Base):
 
 
 class CalendarNote(Base):
-    """A note attached to a specific calendar date (shown in month view)."""
+    """A note attached to a calendar date or date range (shown in month/week view)."""
     __tablename__ = "calendar_notes"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    note_date = Column(String(10), nullable=False)   # YYYY-MM-DD
+    note_date = Column(String(10), nullable=False)   # YYYY-MM-DD (start date)
+    note_end_date = Column(String(10), nullable=True)  # YYYY-MM-DD (end date, NULL = single day)
     start_time = Column(String(5), nullable=True)    # HH:MM (optional)
     end_time = Column(String(5), nullable=True)      # HH:MM (optional)
     content = Column(String(1000), nullable=False)

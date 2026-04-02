@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PikA - Pickleball Airways</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=19" />
+  <link rel="stylesheet" href="/static/css/style.css?v=24" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
 </head>
 <body>
@@ -58,6 +58,7 @@
 <div class="toolbar">
   <button class="btn btn-primary" id="btnAddAircraft"><i class="fas fa-plus"></i> Thêm tàu</button>
   <button class="btn btn-success" id="btnAddSector"><i class="fas fa-plus-circle"></i> Thêm chặng</button>
+  <button class="btn btn-success" id="btnAddChain"><i class="fas fa-link"></i> Thêm chuỗi</button>
   <div class="separator"></div>
   <button class="btn btn-secondary" id="btnRules"><i class="fas fa-cog"></i> Quy tắc</button>
   <div class="separator"></div>
@@ -105,11 +106,16 @@
   </div>
 
   <!-- Warning panel -->
+  <button class="warning-toggle-btn" id="btnToggleWarnings" title="Ẩn/hiện cảnh báo">
+    <i class="fas fa-exclamation-triangle"></i>
+    <span class="badge warning-toggle-badge" id="warningBadgeToggle">0</span>
+  </button>
   <aside class="warning-panel" id="warningPanel">
     <div class="warning-header">
       <i class="fas fa-exclamation-triangle"></i>
       <span>Cảnh báo</span>
       <span class="badge" id="warningBadge">0</span>
+      <button class="warning-collapse-btn" id="btnCollapseWarnings" title="Thu gọn"><i class="fas fa-chevron-right"></i></button>
     </div>
     <div class="warning-list" id="warningList">
       <div class="no-warnings">Không có cảnh báo</div>
@@ -236,6 +242,76 @@
   </div>
 </div>
 
+<!-- Chain Flight Entry Modal -->
+<div class="modal-overlay hidden" id="chainModalOverlay">
+  <div class="modal modal-lg">
+    <div class="modal-header">
+      <h2>Thêm chuỗi chặng bay</h2>
+      <button class="close-btn" data-close="chainModalOverlay"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Tàu bay *</label>
+          <select id="chainAircraftId"></select>
+        </div>
+        <div class="form-group">
+          <label>Số hiệu chuyến (gốc)</label>
+          <div class="input-prefix-wrap">
+            <span class="input-prefix">VU</span>
+            <input type="text" id="chainFlightNum" placeholder="100" maxlength="6" style="border-radius:0 6px 6px 0;" />
+          </div>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Giờ khởi hành đầu tiên (UTC) *</label>
+          <input type="text" id="chainDepTime" placeholder="07:00" maxlength="5" class="time-input-24h" />
+        </div>
+      </div>
+      <!-- Repeat (period) -->
+      <div class="form-row">
+        <div class="form-group">
+          <label>Từ ngày *</label>
+          <input type="date" id="chainDateFrom" />
+        </div>
+        <div class="form-group">
+          <label>Đến ngày *</label>
+          <input type="date" id="chainDateTo" />
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Các ngày trong tuần</label>
+        <div class="dow-checkboxes">
+          <label class="checkbox-label"><input type="checkbox" class="chain-dow-cb" value="1" checked /> T2</label>
+          <label class="checkbox-label"><input type="checkbox" class="chain-dow-cb" value="2" checked /> T3</label>
+          <label class="checkbox-label"><input type="checkbox" class="chain-dow-cb" value="3" checked /> T4</label>
+          <label class="checkbox-label"><input type="checkbox" class="chain-dow-cb" value="4" checked /> T5</label>
+          <label class="checkbox-label"><input type="checkbox" class="chain-dow-cb" value="5" checked /> T6</label>
+          <label class="checkbox-label"><input type="checkbox" class="chain-dow-cb" value="6" checked /> T7</label>
+          <label class="checkbox-label"><input type="checkbox" class="chain-dow-cb" value="0" checked /> CN</label>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Chuỗi chặng bay (mỗi dòng: ĐIỂM ĐI-ĐIỂM ĐẾN) *</label>
+        <textarea id="chainRoutes" rows="6" placeholder="SGN-HAN&#10;HAN-SGN&#10;SGN-DAD&#10;DAD-SGN" style="font-family:monospace;font-size:13px;"></textarea>
+      </div>
+      <button class="btn btn-secondary" id="btnChainPreview"><i class="fas fa-eye"></i> Xem trước</button>
+      <div id="chainPreviewBox" class="hidden" style="margin-top:12px;">
+        <table class="data-table" style="font-size:12px;">
+          <thead><tr><th>#</th><th>Chặng</th><th>Dep (UTC)</th><th>Arr (UTC)</th><th>Block</th><th>TAT</th></tr></thead>
+          <tbody id="chainPreviewBody"></tbody>
+        </table>
+        <div id="chainPreviewError" class="inline-warning hidden" style="margin-top:8px;"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="chainModalOverlay">Huỷ</button>
+      <button class="btn btn-primary" id="btnSaveChain">Tạo chuỗi</button>
+    </div>
+  </div>
+</div>
+
 <!-- Aircraft Modal -->
 <div class="modal-overlay hidden" id="aircraftModalOverlay">
   <div class="modal modal-sm" id="aircraftModal">
@@ -333,7 +409,7 @@
           <input type="file" id="btFileInput" accept=".xlsx,.xls" style="display:none" />
         </div>
         <table class="data-table" id="btTable">
-          <thead><tr><th>Điểm đi</th><th>Điểm đến</th><th>Block time</th><th>Thập phân</th><th class="admin-only"></th></tr></thead>
+          <thead><tr><th>Điểm đi</th><th>Điểm đến</th><th>Block time</th><th>Thập phân</th><th>ATS</th><th class="admin-only"></th></tr></thead>
           <tbody id="btTableBody"></tbody>
         </table>
       </div>
@@ -366,10 +442,12 @@
         <div class="table-toolbar">
           <button class="btn btn-success btn-sm admin-only" id="btnAddReg"><i class="fas fa-plus"></i> Thêm</button>
           <button class="btn btn-secondary btn-sm" id="btnExportRegExcel"><i class="fas fa-file-excel"></i> Xuất Excel</button>
+          <button class="btn btn-secondary btn-sm admin-only" id="btnImportRegExcel"><i class="fas fa-file-upload"></i> Nhập Excel</button>
+          <input type="file" id="regFileInput" accept=".xlsx,.xls" style="display:none" />
           <button class="btn btn-secondary btn-sm" id="btnExportRegCsv"><i class="fas fa-file-csv"></i> Xuất CSV</button>
         </div>
         <table class="data-table" id="regTable">
-          <thead><tr><th>Số đăng bạ</th><th>Mẫu máy bay</th><th>Số ghế</th><th>D/W</th><th class="admin-only"></th></tr></thead>
+          <thead><tr><th>Số đăng bạ</th><th>Mẫu máy bay</th><th>Số ghế</th><th>D/W</th><th>MTOW</th><th class="admin-only"></th></tr></thead>
           <tbody id="regTableBody"></tbody>
         </table>
         <div class="inline-form hidden" id="regForm">
@@ -382,6 +460,7 @@
             <option value="Dry">Dry</option>
             <option value="Wet">Wet</option>
           </select>
+          <input type="number" id="regMTOW" step="0.1" min="0" placeholder="MTOW" style="width:90px" />
           <button class="btn btn-primary btn-sm" id="btnSaveReg">Lưu</button>
           <button class="btn btn-secondary btn-sm" id="btnCancelReg">Huỷ</button>
         </div>
@@ -720,6 +799,10 @@
         <label>Block time <span class="required">*</span></label>
         <input type="text" id="btTime" placeholder="01:30" maxlength="5" class="time-input-24h" />
       </div>
+      <div class="form-group">
+        <label>ATS</label>
+        <input type="text" id="btATS" placeholder="W1, A1..." maxlength="100" />
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" data-close="btFormModal">Huỷ</button>
@@ -857,10 +940,19 @@
     </div>
     <div class="modal-body">
       <input type="hidden" id="noteId" />
-      <input type="hidden" id="noteDate" />
       <div class="form-group">
         <label>Nội dung <span class="required">*</span></label>
         <textarea id="noteContent" rows="3" placeholder="Nhập ghi chú..." style="width:100%;resize:vertical;"></textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Từ ngày <span class="required">*</span></label>
+          <input type="date" id="noteDate" />
+        </div>
+        <div class="form-group">
+          <label>Đến ngày</label>
+          <input type="date" id="noteEndDate" placeholder="Bỏ trống = 1 ngày" />
+        </div>
       </div>
       <div class="form-row">
         <div class="form-group">
@@ -902,9 +994,9 @@
 </div>
 
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-<script src="/static/js/api.js?v=19"></script>
-<script src="/static/js/history.js?v=19"></script>
-<script src="/static/js/gantt.js?v=19"></script>
-<script src="/static/js/app.js?v=19"></script>
+<script src="/static/js/api.js?v=24"></script>
+<script src="/static/js/history.js?v=24"></script>
+<script src="/static/js/gantt.js?v=24"></script>
+<script src="/static/js/app.js?v=24"></script>
 </body>
 </html>

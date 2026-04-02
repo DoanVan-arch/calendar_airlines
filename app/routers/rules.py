@@ -150,11 +150,8 @@ def create_block_time_rule(payload: BlockTimeRuleCreate, db: Session = Depends(g
         BlockTimeRule.origin == orig, BlockTimeRule.destination == dest
     ).first()
     if existing:
-        existing.block_time_minutes = payload.block_time_minutes
-        db.commit()
-        db.refresh(existing)
-        return existing
-    rule = BlockTimeRule(origin=orig, destination=dest, block_time_minutes=payload.block_time_minutes)
+        raise HTTPException(409, f"Block time rule {orig}-{dest} đã tồn tại. Vui lòng sửa thay vì tạo mới.")
+    rule = BlockTimeRule(origin=orig, destination=dest, block_time_minutes=payload.block_time_minutes, ats=payload.ats)
     db.add(rule)
     db.commit()
     db.refresh(rule)
@@ -166,9 +163,20 @@ def update_block_time_rule(rule_id: int, payload: BlockTimeRuleCreate, db: Sessi
     rule = db.query(BlockTimeRule).filter(BlockTimeRule.id == rule_id).first()
     if not rule:
         raise HTTPException(404, "Block-time rule not found")
-    rule.origin = payload.origin.upper()
-    rule.destination = payload.destination.upper()
+    orig = payload.origin.upper()
+    dest = payload.destination.upper()
+    # Check for duplicate: another rule with same origin-dest (different id)
+    dup = db.query(BlockTimeRule).filter(
+        BlockTimeRule.origin == orig,
+        BlockTimeRule.destination == dest,
+        BlockTimeRule.id != rule_id,
+    ).first()
+    if dup:
+        raise HTTPException(409, f"Block time rule {orig}-{dest} đã tồn tại (ID {dup.id})")
+    rule.origin = orig
+    rule.destination = dest
     rule.block_time_minutes = payload.block_time_minutes
+    rule.ats = payload.ats
     db.commit()
     db.refresh(rule)
     return rule
@@ -193,7 +201,7 @@ def minutes_to_hhmm(minutes: int) -> str:
 def minutes_to_decimal(minutes: int) -> str:
     h = minutes // 60
     frac = round((minutes % 60) / 60 * 100)
-    return f"{h:02d},{frac:02d}"
+    return f"{h:02d}.{frac:02d}"
 
 
 def hhmm_to_minutes(value) -> int:
@@ -284,11 +292,11 @@ def export_blocktime_excel(db: Session = Depends(get_db)):
     ws.title = "Block Time Rules"
     
     # Header
-    ws.append(["Origin", "Destination", "Block Time", "Decimal"])
+    ws.append(["Origin", "Destination", "Block Time", "Decimal", "ATS"])
     
     # Data
     for r in rules:
-        ws.append([r.origin, r.destination, minutes_to_hhmm(r.block_time_minutes), minutes_to_decimal(r.block_time_minutes)])
+        ws.append([r.origin, r.destination, minutes_to_hhmm(r.block_time_minutes), minutes_to_decimal(r.block_time_minutes), r.ats or ""])
     
     # Auto-width columns
     for col in ws.columns:
@@ -323,6 +331,7 @@ async def import_blocktime_excel(file: UploadFile = File(...), db: Session = Dep
         dest = str(row[1]).upper().strip()
         time_str = str(row[2]).strip()
         minutes = hhmm_to_minutes(time_str)
+        ats = str(row[4]).strip() if len(row) > 4 and row[4] else None
         
         existing = db.query(BlockTimeRule).filter(
             BlockTimeRule.origin == origin,
@@ -330,8 +339,9 @@ async def import_blocktime_excel(file: UploadFile = File(...), db: Session = Dep
         ).first()
         if existing:
             existing.block_time_minutes = minutes
+            existing.ats = ats
         else:
-            db.add(BlockTimeRule(origin=origin, destination=dest, block_time_minutes=minutes))
+            db.add(BlockTimeRule(origin=origin, destination=dest, block_time_minutes=minutes, ats=ats))
         imported += 1
     
     db.commit()
@@ -350,7 +360,7 @@ def create_registration(payload: RegistrationCreate, db: Session = Depends(get_d
     existing = db.query(Registration).filter(Registration.registration == reg).first()
     if existing:
         raise HTTPException(400, f"Registration '{reg}' already exists")
-    r = Registration(registration=reg, aircraft_model=payload.aircraft_model, seats=payload.seats, dw_type=payload.dw_type)
+    r = Registration(registration=reg, aircraft_model=payload.aircraft_model, seats=payload.seats, dw_type=payload.dw_type, mtow=payload.mtow)
     db.add(r)
     db.commit()
     db.refresh(r)
@@ -386,9 +396,9 @@ def export_registration_excel(db: Session = Depends(get_db)):
     ws = wb.active
     ws.title = "Registrations"
 
-    ws.append(["Số đăng bạ", "Mẫu máy bay", "Số ghế", "D/W"])
+    ws.append(["Số đăng bạ", "Mẫu máy bay", "Số ghế", "D/W", "MTOW"])
     for r in regs:
-        ws.append([r.registration, r.aircraft_model, r.seats, r.dw_type or ""])
+        ws.append([r.registration, r.aircraft_model, r.seats, r.dw_type or "", r.mtow or ""])
 
     for col in ws.columns:
         max_length = 0
@@ -414,9 +424,9 @@ def export_registration_csv(db: Session = Depends(get_db)):
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Số đăng bạ", "Mẫu máy bay", "Số ghế", "D/W"])
+    writer.writerow(["Số đăng bạ", "Mẫu máy bay", "Số ghế", "D/W", "MTOW"])
     for r in regs:
-        writer.writerow([r.registration, r.aircraft_model, r.seats, r.dw_type or ""])
+        writer.writerow([r.registration, r.aircraft_model, r.seats, r.dw_type or "", r.mtow or ""])
 
     output.seek(0)
     return StreamingResponse(
@@ -424,3 +434,36 @@ def export_registration_csv(db: Session = Depends(get_db)):
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": "attachment; filename=registrations.csv"},
     )
+
+
+@router.post("/registration/import/excel")
+async def import_registration_excel(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    content = await file.read()
+    wb = openpyxl.load_workbook(io.BytesIO(content))
+    ws = wb.active
+
+    imported = 0
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        if not row[0]:
+            continue
+        reg_code = str(row[0]).upper().strip()
+        model = str(row[1]).strip() if row[1] else ""
+        seats = int(row[2]) if row[2] else 0
+        dw = str(row[3]).strip() if len(row) > 3 and row[3] else None
+        mtow_val = float(row[4]) if len(row) > 4 and row[4] else None
+
+        existing = db.query(Registration).filter(Registration.registration == reg_code).first()
+        if existing:
+            existing.aircraft_model = model
+            existing.seats = seats
+            existing.dw_type = dw if dw else None
+            existing.mtow = mtow_val
+        else:
+            db.add(Registration(
+                registration=reg_code, aircraft_model=model, seats=seats,
+                dw_type=dw if dw else None, mtow=mtow_val,
+            ))
+        imported += 1
+
+    db.commit()
+    return {"imported": imported}

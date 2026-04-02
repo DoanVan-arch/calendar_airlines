@@ -49,12 +49,17 @@ def fmt_display(sector: FlightSector, timezone: str, airports: dict) -> dict:
         dep_disp = apply_tz(sector.dep_utc, orig_tz)
         arr_disp = apply_tz(sector.arr_utc, dest_tz)
 
+    # Day of week: Mon=1 .. Sun=7
+    dt = datetime.strptime(sector.flight_date, "%Y-%m-%d")
+    dow = dt.isoweekday()  # Monday=1, Sunday=7
+
     return {
         "id": sector.id,
         "aircraft_id": sector.aircraft_id,
         "flight_date": sector.flight_date,
         "origin": sector.origin,
         "destination": sector.destination,
+        "route": f"{sector.origin}-{sector.destination}",
         "dep_utc": sector.dep_utc,
         "arr_utc": sector.arr_utc,
         "dep_display": dep_disp,
@@ -65,6 +70,7 @@ def fmt_display(sector: FlightSector, timezone: str, airports: dict) -> dict:
         "block_time_minutes": block_minutes(sector.dep_utc, sector.arr_utc),
         "flight_number": sector.flight_number,
         "status": sector.status,
+        "day_of_week": str(dow),
     }
 
 
@@ -121,17 +127,49 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
         r["aircraft_reg"] = ac.registration if ac else "?"
 
     if params.mode == "daily":
-        return {"mode": "daily", "timezone": params.timezone, "rows": rows}
+        # Merge identical sectors: group by (aircraft_id, route, dep_utc, arr_utc, flight_number)
+        merged: dict = defaultdict(lambda: {"dates": [], "dows": set()})
+        for r in rows:
+            key = (
+                r["aircraft_id"],
+                r["route"],
+                r["dep_utc"],
+                r["arr_utc"],
+                r.get("flight_number") or "",
+            )
+            merged[key]["dates"].append(r["flight_date"])
+            merged[key]["dows"].add(int(r["day_of_week"]))
+            merged[key]["row"] = r  # keep latest row as template
+
+        merged_rows = []
+        for key, grp in merged.items():
+            r = dict(grp["row"])  # clone template row
+            dows_sorted = sorted(grp["dows"])
+            r["day_of_week"] = "".join(str(d) for d in dows_sorted)
+            r["date_range"] = compress_dates(grp["dates"])
+            r["flight_count"] = len(grp["dates"])
+            merged_rows.append(r)
+
+        # Default sort: by aircraft (line_order), then by route, then by dep time
+        merged_rows.sort(key=lambda r: (
+            (aircraft_map[r["aircraft_id"]].line_order if r["aircraft_id"] in aircraft_map else 0),
+            r["aircraft_reg"],
+            r["route"],
+            r["dep_utc"],
+        ))
+        return {"mode": "daily", "timezone": params.timezone, "rows": merged_rows}
 
     # GROUP mode – group by (origin, destination, dep_display [UTC hour:min key])
-    grouped: dict = defaultdict(lambda: {"dates": [], "aircraft": set()})
+    grouped: dict = defaultdict(lambda: {"dates": [], "aircraft": set(), "dows": set()})
     for r in rows:
         key = f"{r['origin']}-{r['destination']}|{r['dep_utc']}|{r['arr_utc']}"
         grouped[key]["dates"].append(r["flight_date"])
         grouped[key]["aircraft"].add(r["aircraft_reg"])
+        grouped[key]["dows"].add(int(r["day_of_week"]))
         grouped[key].update({
             "origin": r["origin"],
             "destination": r["destination"],
+            "route": r["route"],
             "dep_utc": r["dep_utc"],
             "arr_utc": r["arr_utc"],
             "dep_display": r["dep_display"],
@@ -142,9 +180,13 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
 
     group_rows = []
     for key, grp in grouped.items():
+        # Compute DAY string: sorted unique DOWs, e.g. "1234567" for daily
+        dows_sorted = sorted(grp["dows"])
+        day_str = "".join(str(d) for d in dows_sorted)
         group_rows.append({
             "origin": grp["origin"],
             "destination": grp["destination"],
+            "route": grp["route"],
             "dep_display": grp["dep_display"],
             "arr_display": grp["arr_display"],
             "dep_utc": grp["dep_utc"],
@@ -153,6 +195,7 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
             "date_range": compress_dates(grp["dates"]),
             "flight_count": len(grp["dates"]),
             "aircraft": sorted(grp["aircraft"]),
+            "day_of_week": day_str,
             "timezone": params.timezone,
         })
 

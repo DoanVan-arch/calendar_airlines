@@ -50,8 +50,8 @@ def get_iata_defaults(years: int = 3):
     result = []
     for y in range(current_year - 1, current_year + years + 1):
         summer_start = _last_sunday_of_march(y)
-        summer_end   = _last_saturday_of_october(y) - timedelta(days=1)
-        winter_start = _last_saturday_of_october(y)
+        summer_end   = date(y, 10, 24)
+        winter_start = date(y, 10, 25)
         winter_end   = _last_sunday_of_march(y + 1) - timedelta(days=1)
         result.append({
             "year": y,

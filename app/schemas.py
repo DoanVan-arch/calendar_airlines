@@ -106,6 +106,7 @@ class BlockTimeRuleBase(BaseModel):
     origin: str
     destination: str
     block_time_minutes: int
+    ats: Optional[str] = None  # ATS route (đường bay không lưu)
 
 
 class BlockTimeRuleCreate(BlockTimeRuleBase):
@@ -155,6 +156,7 @@ class RegistrationBase(BaseModel):
     aircraft_model: str
     seats: int
     dw_type: Optional[str] = None  # "Dry", "Wet", or None
+    mtow: Optional[float] = None   # Maximum Take-Off Weight (tonnes)
 
 
 class RegistrationCreate(RegistrationBase):
@@ -166,6 +168,7 @@ class RegistrationUpdate(BaseModel):
     aircraft_model: Optional[str] = None
     seats: Optional[int] = None
     dw_type: Optional[str] = None  # "Dry", "Wet", or None
+    mtow: Optional[float] = None   # Maximum Take-Off Weight (tonnes)
 
 
 class RegistrationOut(RegistrationBase):
@@ -259,7 +262,8 @@ class AuditLogOut(BaseModel):
 
 # ── Calendar notes ──────────────────────────────────────────────────────────────
 class CalendarNoteBase(BaseModel):
-    note_date: str               # YYYY-MM-DD
+    note_date: str               # YYYY-MM-DD (start date)
+    note_end_date: Optional[str] = None  # YYYY-MM-DD (end date, None = single day)
     start_time: Optional[str] = None   # HH:MM
     end_time: Optional[str] = None     # HH:MM
     content: str
@@ -272,6 +276,7 @@ class CalendarNoteCreate(CalendarNoteBase):
 
 class CalendarNoteUpdate(BaseModel):
     note_date: Optional[str] = None
+    note_end_date: Optional[str] = None
     start_time: Optional[str] = None
     end_time: Optional[str] = None
     content: Optional[str] = None

@@ -35,6 +35,7 @@ def list_aircraft(db: Session = Depends(get_db)):
                 "aircraft_model": reg.aircraft_model,
                 "seats": reg.seats,
                 "dw_type": reg.dw_type,
+                "mtow": reg.mtow,
             }
         result.append(ac_dict)
     return result

@@ -1,9 +1,10 @@
-"""Calendar notes router – short notes attached to specific calendar dates."""
+"""Calendar notes router – short notes attached to calendar dates or date ranges."""
 
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
+from sqlalchemy import or_, and_
 
 from ..database import get_db
 from ..models import CalendarNote
@@ -22,11 +23,59 @@ def list_notes(
 ):
     q = db.query(CalendarNote)
     if month:
-        q = q.filter(CalendarNote.note_date.like(f"{month}%"))
+        # A note is visible in a month if:
+        # - note_date is in that month, OR
+        # - note spans into that month (note_date <= last day of month AND note_end_date >= first day of month)
+        month_start = f"{month}-01"
+        # Calculate last day of month
+        year, mon = int(month[:4]), int(month[5:7])
+        if mon == 12:
+            month_end = f"{year + 1}-01-01"
+        else:
+            month_end = f"{year}-{mon + 1:02d}-01"
+        # Use string comparison (works with YYYY-MM-DD format)
+        import datetime as _dt
+        last_day = (_dt.date(int(month_end[:4]), int(month_end[5:7]), 1) - _dt.timedelta(days=1)).isoformat()
+
+        q = q.filter(
+            or_(
+                # Single-day note in this month
+                and_(CalendarNote.note_end_date.is_(None), CalendarNote.note_date.like(f"{month}%")),
+                # Range note overlapping this month
+                and_(
+                    CalendarNote.note_end_date.isnot(None),
+                    CalendarNote.note_date <= last_day,
+                    CalendarNote.note_end_date >= month_start,
+                ),
+            )
+        )
     if date:
-        q = q.filter(CalendarNote.note_date == date)
+        q = q.filter(
+            or_(
+                # Single-day note on this date
+                and_(CalendarNote.note_end_date.is_(None), CalendarNote.note_date == date),
+                # Range note spanning this date
+                and_(
+                    CalendarNote.note_end_date.isnot(None),
+                    CalendarNote.note_date <= date,
+                    CalendarNote.note_end_date >= date,
+                ),
+            )
+        )
     if start and end:
-        q = q.filter(CalendarNote.note_date >= start, CalendarNote.note_date <= end)
+        q = q.filter(
+            or_(
+                # Single-day note within the range
+                and_(CalendarNote.note_end_date.is_(None),
+                     CalendarNote.note_date >= start, CalendarNote.note_date <= end),
+                # Range note overlapping the query range
+                and_(
+                    CalendarNote.note_end_date.isnot(None),
+                    CalendarNote.note_date <= end,
+                    CalendarNote.note_end_date >= start,
+                ),
+            )
+        )
     return q.order_by(CalendarNote.note_date, CalendarNote.start_time).all()
 
 
@@ -44,7 +93,8 @@ def update_note(note_id: int, payload: CalendarNoteUpdate, db: Session = Depends
     note = db.query(CalendarNote).filter(CalendarNote.id == note_id).first()
     if not note:
         raise HTTPException(404, "Không tìm thấy ghi chú")
-    for field, value in payload.model_dump(exclude_none=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    for field, value in data.items():
         setattr(note, field, value)
     db.commit()
     db.refresh(note)

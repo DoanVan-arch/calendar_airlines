@@ -150,7 +150,7 @@ class GanttChart {
   }
 
   // ── Public render ───────────────────────────────────────────────────────────
-  render({ aircraft, sectors, airports, timezone, warnings, maintenance, currentDate }) {
+  render({ aircraft, sectors, airports, timezone, warnings, maintenance, currentDate, prevDayLast }) {
     this._aircraft    = aircraft;
     this._sectors     = sectors;
     this._airports    = airports;
@@ -158,6 +158,7 @@ class GanttChart {
     this._maintenance = maintenance || [];
     this._currentDate = currentDate || "";
     this._lastWarnings = warnings || [];
+    this._prevDayLast = prevDayLast || {}; // aircraft_id → last sector of previous day
 
     // Build aircraft color map: acId → color (null if not set)
     this._acColorMap = {};
@@ -423,6 +424,13 @@ class GanttChart {
 
     this._attachDropHandlers(row, ac.id);
 
+    // ── Previous day connection indicator ────────────────────────────────────
+    const prevSector = this._prevDayLast[ac.id];
+    if (prevSector) {
+      const connEl = this._makePrevDayConnection(prevSector, sectors);
+      if (connEl) row.appendChild(connEl);
+    }
+
     // Sort by effective departure time (accounting for day offset)
     const sorted = [...sectors].sort((a, b) => {
       const dayA = a._dayOffset || (a._nextDay ? 1 : 0);
@@ -583,6 +591,55 @@ class GanttChart {
     return el;
   }
 
+  // ── Previous day connection indicator ────────────────────────────────────
+  _makePrevDayConnection(prevSector, todaySectors) {
+    // Show a ghost indicator at the left edge showing the previous day's last sector
+    // and a dashed connection line to today's first sector (if any)
+    const el = document.createElement("div");
+    el.className = "prev-day-conn";
+
+    // Position: arrival time of prev sector mapped as negative offset from day 0
+    // We show a small indicator pinned to the left edge (x=0)
+    const arrMin = timeToMin(prevSector.arr_utc);
+    const depDisp = this._displayTime(prevSector.dep_utc, prevSector.origin);
+    const arrDisp = this._displayTime(prevSector.arr_utc, prevSector.destination);
+
+    el.style.left = "0px";
+
+    // Find today's first sector (day offset 0) for this aircraft
+    const todayFirst = todaySectors
+      .filter(s => (s._dayOffset === 0 || (!s._dayOffset && !s._nextDay)) && s.status === "active")
+      .sort((a, b) => timeToMin(a.dep_utc) - timeToMin(b.dep_utc))[0];
+
+    if (todayFirst) {
+      const firstDepMin = timeToMin(todayFirst.dep_utc);
+      // Width of the connection indicator: from 0 to first sector's departure
+      const width = Math.max(firstDepMin * PX_PER_MIN, 40);
+      el.style.width = width + "px";
+    } else {
+      el.style.width = "120px";
+    }
+
+    // Continuity check
+    const isContinuous = todayFirst && prevSector.destination === todayFirst.origin;
+    if (!isContinuous && todayFirst) {
+      el.classList.add("conn-break");
+    }
+
+    const prevDate = prevSector.flight_date || "?";
+    el.innerHTML = `<span class="prev-day-label">◂ ${prevSector.origin}→${prevSector.destination} ${arrDisp}</span>`;
+    el.title = [
+      `Chặng cuối ngày trước (${prevDate}):`,
+      `${prevSector.origin} → ${prevSector.destination}`,
+      `Dep: ${prevSector.dep_utc} UTC  Arr: ${prevSector.arr_utc} UTC`,
+      todayFirst ? (isContinuous
+        ? `✓ Nối tiếp: hạ cánh ${prevSector.destination} → cất cánh ${todayFirst.origin}`
+        : `✗ Gián đoạn: hạ cánh ${prevSector.destination} ≠ cất cánh ${todayFirst.origin}`)
+      : "Không có chặng bay hôm nay",
+    ].join("\n");
+
+    return el;
+  }
   // ── Sector block ────────────────────────────────────────────────────────────
   _makeSectorBlock(sector) {
     // Support both _dayOffset (new) and _nextDay (legacy) for day positioning

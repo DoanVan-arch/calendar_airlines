@@ -663,6 +663,38 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
   color: rgba(218,54,51,0.9);
 }
 
+/* Previous day connection indicator */
+.prev-day-conn {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 26px;
+  background: linear-gradient(90deg, rgba(59,130,246,0.25) 0%, rgba(59,130,246,0.05) 100%);
+  border: 1px dashed rgba(59,130,246,0.5);
+  border-left: 3px solid rgba(59,130,246,0.7);
+  border-radius: 0 4px 4px 0;
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+  font-size: 10px;
+  color: rgba(147,197,253,0.9);
+  overflow: hidden;
+  pointer-events: auto;
+  cursor: default;
+  z-index: 3;
+  white-space: nowrap;
+}
+.prev-day-conn.conn-break {
+  background: linear-gradient(90deg, rgba(218,54,51,0.25) 0%, rgba(218,54,51,0.05) 100%);
+  border-color: rgba(218,54,51,0.5);
+  border-left-color: rgba(218,54,51,0.8);
+  color: rgba(252,165,165,0.9);
+}
+.prev-day-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ── Warning panel ─────────────────────────────────────────────────────────── */
 .warning-panel {
   width: 280px;
@@ -672,6 +704,41 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
   flex-direction: column;
   background: var(--bg-panel);
   overflow: hidden;
+  transition: width 0.25s ease, opacity 0.25s ease;
+}
+
+.warning-panel.collapsed {
+  width: 0;
+  border-left: none;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.warning-toggle-btn {
+  display: none;
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 100;
+  background: var(--warning);
+  color: #000;
+  border: none;
+  border-radius: 50%;
+  width: 44px;
+  height: 44px;
+  font-size: 16px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  transition: transform 0.15s;
+}
+.warning-toggle-btn:hover { transform: scale(1.1); }
+.warning-toggle-btn.visible { display: flex; align-items: center; justify-content: center; }
+.warning-toggle-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  font-size: 10px;
+  padding: 1px 5px;
 }
 
 .warning-header {
@@ -682,6 +749,22 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
   border-bottom: 1px solid var(--border);
   font-weight: 600;
   color: var(--warning);
+}
+
+.warning-collapse-btn {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  transition: color 0.15s, background 0.15s;
+}
+.warning-collapse-btn:hover {
+  color: var(--text);
+  background: var(--bg-surface);
 }
 
 .badge {
@@ -1414,6 +1497,19 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
 }
 .month-note-chip:hover { filter: brightness(1.2); }
 
+/* Range notes: subtle indicator */
+.month-note-chip.note-range,
+.week-note-chip.note-range {
+  border-right: 3px solid rgba(255,255,255,0.3);
+}
+
+/* ── Timetable sort buttons ───────────────────────────────────────────────── */
+.tt-sort-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
 /* ── Month view: add note button ──────────────────────────────────────────── */
 .month-add-note {
   display: none;
@@ -1764,6 +1860,16 @@ body {
   font-size: 11px;
   white-space: nowrap;
   margin-left: 8px;
+}
+
+.paste-day-offset {
+  color: #fbbf24;
+  font-size: 10px;
+  font-weight: 600;
+  margin-left: 6px;
+  background: rgba(251, 191, 36, 0.15);
+  padding: 1px 5px;
+  border-radius: 3px;
 }
 
 /* ── Checkbox label (inline checkbox + text) ─────────────────────────────────── */

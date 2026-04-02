@@ -256,6 +256,27 @@ def _migrate_db():
         except Exception:
             pass
 
+        # Add mtow column to registrations table
+        try:
+            conn.execute(text("ALTER TABLE registrations ADD COLUMN mtow REAL"))
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+
+        # Add ats column to block_time_rules table
+        try:
+            conn.execute(text("ALTER TABLE block_time_rules ADD COLUMN ats VARCHAR(100)"))
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+
+        # Add note_end_date column to calendar_notes table
+        try:
+            conn.execute(text("ALTER TABLE calendar_notes ADD COLUMN note_end_date VARCHAR(10)"))
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+
 
 app = FastAPI(title="Airline Schedule Manager", lifespan=lifespan)
 
