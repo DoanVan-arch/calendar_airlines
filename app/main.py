@@ -277,6 +277,33 @@ def _migrate_db():
         except Exception:
             pass  # Column already exists
 
+        # Create route_colors table
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS route_colors (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    origin VARCHAR(10) NOT NULL,
+                    destination VARCHAR(10) NOT NULL,
+                    color VARCHAR(20) NOT NULL,
+                    UNIQUE(origin, destination)
+                )
+            """))
+            conn.commit()
+        except Exception:
+            pass
+
+        # Create app_settings table
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key VARCHAR(100) PRIMARY KEY,
+                    value VARCHAR(500)
+                )
+            """))
+            conn.commit()
+        except Exception:
+            pass
+
 
 app = FastAPI(title="Airline Schedule Manager", lifespan=lifespan)
 

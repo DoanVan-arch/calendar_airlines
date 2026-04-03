@@ -286,3 +286,19 @@ class CalendarNoteUpdate(BaseModel):
 class CalendarNoteOut(CalendarNoteBase):
     id: int
     model_config = {"from_attributes": True}
+
+
+# ── Route colors ───────────────────────────────────────────────────────────────
+class RouteColorBase(BaseModel):
+    origin: str
+    destination: str
+    color: str
+
+
+class RouteColorCreate(RouteColorBase):
+    pass
+
+
+class RouteColorOut(RouteColorBase):
+    id: int
+    model_config = {"from_attributes": True}

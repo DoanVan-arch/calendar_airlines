@@ -125,6 +125,7 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
     for r in rows:
         ac = aircraft_map.get(r["aircraft_id"])
         r["aircraft_reg"] = ac.registration if ac else "?"
+        r["line_order"] = ac.line_order if ac else 0
 
     if params.mode == "daily":
         # Merge identical sectors: group by (aircraft_id, route, dep_utc, arr_utc, flight_number)
@@ -150,11 +151,10 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
             r["flight_count"] = len(grp["dates"])
             merged_rows.append(r)
 
-        # Default sort: by aircraft (line_order), then by route, then by dep time
+        # Default sort: by aircraft (line_order), then by dep time (like Gantt line order)
         merged_rows.sort(key=lambda r: (
             (aircraft_map[r["aircraft_id"]].line_order if r["aircraft_id"] in aircraft_map else 0),
             r["aircraft_reg"],
-            r["route"],
             r["dep_utc"],
         ))
         return {"mode": "daily", "timezone": params.timezone, "rows": merged_rows}

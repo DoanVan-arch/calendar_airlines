@@ -21,6 +21,8 @@ const state = {
   userRole    : "viewer",       // "admin" | "viewer" — loaded from /api/auth/me
   username    : "",
   clipboard   : null,           // { type:'sectors'|'line', sectors:[...], sourceAcId, sourceDate }
+  routeColors : {},             // keyed by "ORIG-DEST" → color string
+  routeColorEnabled : false,    // toggle for route-based coloring
 };
 
 const history = new HistoryManager();
@@ -207,7 +209,7 @@ function applyRoleUI() {
 }
 
 async function loadReferenceData() {
-  const [aircraft, airports, btRules, tatRules, massTAT, seasons, registrations] = await Promise.all([
+  const [aircraft, airports, btRules, tatRules, massTAT, seasons, registrations, routeColors, rcEnabledSetting] = await Promise.all([
     API.getAircraft(),
     API.getAirports(),
     API.getBlockTimeRules(),
@@ -215,6 +217,8 @@ async function loadReferenceData() {
     API.getMassTAT().catch(() => ({ domestic: 40, international: 60 })),
     API.getSeasons().catch(() => []),
     API.getRegistrations().catch(() => []),
+    API.getRouteColors().catch(() => []),
+    API.getSetting("route_color_enabled").catch(() => ({ key: "route_color_enabled", value: null })),
   ]);
 
   state.aircraft = aircraft;
@@ -231,6 +235,13 @@ async function loadReferenceData() {
   state.massTAT = massTAT;
   state.seasons = seasons;
   state.registrations = registrations;
+
+  // Route colors map: "ORIG-DEST" → color
+  state.routeColors = {};
+  for (const rc of routeColors) state.routeColors[`${rc.origin}-${rc.destination}`] = rc.color;
+  state.routeColorEnabled = rcEnabledSetting.value === "true";
+  doc("chkRouteColorEnabled").checked = state.routeColorEnabled;
+
   updateSeasonBadge();
 }
 
@@ -304,6 +315,7 @@ async function refreshGantt() {
     maintenance   : state.maintenance,
     currentDate   : state.currentDate,
     prevDayLast   : prevDayLast,
+    routeColors   : state.routeColorEnabled ? state.routeColors : null,
   });
 
   renderWarnings();
@@ -977,11 +989,25 @@ const _PALETTE = [
   "#be123c","#0f766e","#b45309","#1d4ed8","#15803d",
   "#0369a1","#7c3aed","#b91c1c","#047857","#92400e",
 ];
-function routeColorFromSector(s) {
-  const key = [s.origin, s.destination].sort().join("");
+function _hashRouteColor(origin, dest) {
+  const key = [origin, dest].sort().join("");
   let h = 0;
   for (const c of key) h = (Math.imul(31, h) + c.charCodeAt(0)) | 0;
   return _PALETTE[Math.abs(h) % _PALETTE.length];
+}
+function routeColorFromSector(s) {
+  // When route coloring is enabled, route color takes top priority
+  if (state.routeColorEnabled) {
+    const rc = state.routeColors[`${s.origin}-${s.destination}`];
+    if (rc) return rc;
+  }
+  // Per-sector color override
+  if (s.color) return s.color;
+  // Per-aircraft/line color
+  const ac = state.aircraft.find(a => a.id === s.aircraft_id);
+  if (ac && ac.color) return ac.color;
+  // Hash fallback
+  return _hashRouteColor(s.origin, s.destination);
 }
 
 // ─── Sector modal ─────────────────────────────────────────────────────────────
@@ -1317,7 +1343,6 @@ function openChainModal() {
     `<option value="${ac.id}">${ac.registration}${ac.name ? " – " + ac.name : ""}</option>`
   ).join("");
   doc("chainDepTime").value = "";
-  doc("chainFlightNum").value = "";
   doc("chainRoutes").value = "";
   doc("chainDateFrom").value = state.currentDate;
   doc("chainDateTo").value = state.currentDate;
@@ -1333,9 +1358,13 @@ function _parseChainRoutes() {
   return text.split(/\n/).map(line => {
     const clean = line.trim().toUpperCase();
     if (!clean) return null;
-    const m = clean.match(/^([A-Z]{3})\s*[-–→>]\s*([A-Z]{3})$/);
+    // Format: SGN-HAN | VU101  or  SGN-HAN  (flight number optional)
+    const parts = clean.split(/\|/);
+    const routePart = parts[0].trim();
+    const fnPart = parts[1] ? parts[1].trim() : null;
+    const m = routePart.match(/^([A-Z]{3})\s*[-–→>]\s*([A-Z]{3})$/);
     if (!m) return null;
-    return { origin: m[1], destination: m[2] };
+    return { origin: m[1], destination: m[2], flightNumber: fnPart || null };
   }).filter(Boolean);
 }
 
@@ -1384,6 +1413,7 @@ function _buildChainPreview() {
     rows.push({
       origin: r.origin,
       destination: r.destination,
+      flightNumber: r.flightNumber || null,
       depUTC,
       arrUTC,
       blockMin: rule.block_time_minutes,
@@ -1403,9 +1433,10 @@ function _buildChainPreview() {
     }
   }
 
-  // Check if flights extend past 24h
+  // Check if flights extend past 24h — informational only
   if (rows.length > 0 && rows[rows.length - 1]._arrAbsMin > 1440) {
-    errors.push("Cảnh báo: chuỗi bay kéo dài qua ngày hôm sau (tổng > 24h UTC).");
+    const extraDays = Math.floor(rows[rows.length - 1]._arrAbsMin / 1440);
+    errors.push(`Lưu ý: chuỗi bay kéo dài sang +${extraDays} ngày kế tiếp.`);
   }
 
   return { rows, errors };
@@ -1426,11 +1457,14 @@ function previewChain() {
 
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
+    const dayOff = Math.floor(r._depAbsMin / 1440);
+    const dayTag = dayOff > 0 ? ` <span style="color:#fbbf24;font-size:10px;font-weight:600;">+${dayOff}d</span>` : "";
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${i + 1}</td>
       <td>${r.origin}→${r.destination}</td>
-      <td>${r.depUTC}</td>
+      <td>${r.flightNumber || "—"}</td>
+      <td>${r.depUTC}${dayTag}</td>
       <td>${r.arrUTC}</td>
       <td>${minToTime(r.blockMin)} (${r.blockMin}')</td>
       <td>${r.tatMin > 0 ? r.tatMin + "'" : "—"}</td>`;
@@ -1450,8 +1484,8 @@ function previewChain() {
 async function saveChain() {
   const { rows, errors } = _buildChainPreview();
 
-  // Filter out warnings, only block on hard errors (missing block time rules)
-  const hardErrors = errors.filter(e => !e.startsWith("Cảnh báo:"));
+  // Filter out informational notes, only block on hard errors (missing block time rules)
+  const hardErrors = errors.filter(e => !e.startsWith("Cảnh báo:") && !e.startsWith("Lưu ý:"));
   if (hardErrors.length > 0) {
     alert(hardErrors.join("\n"));
     return;
@@ -1464,7 +1498,6 @@ async function saveChain() {
   const acId    = parseInt(doc("chainAircraftId").value, 10);
   const dateFrom = doc("chainDateFrom").value;
   const dateTo   = doc("chainDateTo").value;
-  const baseFN   = doc("chainFlightNum").value.trim();
   if (!acId || !dateFrom || !dateTo) {
     alert("Vui lòng điền đầy đủ thông tin.");
     return;
@@ -1493,34 +1526,27 @@ async function saveChain() {
   while (cur <= end) {
     const dow = cur.getDay();
     if (selectedDOWs.has(dow)) {
-      const flightDate = dateToStr(cur);
+      const baseDate = dateToStr(cur);
       for (let i = 0; i < rows.length; i++) {
         const r = rows[i];
-        // Generate flight number: base + i (e.g. VU100, VU101, VU102...)
-        let fn = null;
-        if (baseFN) {
-          const baseNum = parseInt(baseFN, 10);
-          if (!isNaN(baseNum)) {
-            fn = "VU" + String(baseNum + i);
-          } else {
-            fn = "VU" + baseFN + (i > 0 ? String(i) : "");
-          }
-        }
+        // Compute which day this leg falls on relative to chain start
+        const dayOffset = Math.floor(r._depAbsMin / 1440);
+        const sectorDate = _addDaysStr(baseDate, dayOffset);
         const payload = {
           aircraft_id: acId,
-          flight_date: flightDate,
+          flight_date: sectorDate,
           origin: r.origin,
           destination: r.destination,
           dep_utc: r.depUTC,
           arr_utc: r.arrUTC,
-          flight_number: fn,
+          flight_number: r.flightNumber || null,
           color: sectorColor,
         };
         try {
           const created = await API.createSector(payload);
           createdIds.push(created.id);
         } catch (e) {
-          console.warn(`Skip chain sector ${r.origin}-${r.destination} on ${flightDate}:`, e.message);
+          console.warn(`Skip chain sector ${r.origin}-${r.destination} on ${sectorDate}:`, e.message);
         }
       }
     }
@@ -2369,14 +2395,14 @@ function renderTimetableTable(data) {
           return (a.dep_utc || "").localeCompare(b.dep_utc || "");
         });
       } else {
-        // default: aircraft → route → dep
+        // default: aircraft (by line_order) → dep time (same order as Gantt line)
         sorted.sort((a, b) => {
+          const loA = a.line_order ?? 0;
+          const loB = b.line_order ?? 0;
+          if (loA !== loB) return loA - loB;
           const acA = a.aircraft_reg || (a.aircraft ? a.aircraft.join(",") : "");
           const acB = b.aircraft_reg || (b.aircraft ? b.aircraft.join(",") : "");
           if (acA !== acB) return acA.localeCompare(acB);
-          const routeA = (a.route || `${a.origin}-${a.destination}`);
-          const routeB = (b.route || `${b.origin}-${b.destination}`);
-          if (routeA !== routeB) return routeA.localeCompare(routeB);
           return (a.dep_utc || "").localeCompare(b.dep_utc || "");
         });
       }
@@ -3226,6 +3252,15 @@ function bindUI() {
     doc("btnAddMaintenance").addEventListener("click", () => openMaintenanceModal());
   }
 
+  // Route color modal & toggle
+  doc("btnRouteColors").addEventListener("click", openRouteColorModal);
+  doc("chkRouteColorEnabled").addEventListener("change", async (e) => {
+    state.routeColorEnabled = e.target.checked;
+    await API.setSetting("route_color_enabled", e.target.checked ? "true" : "false");
+    refreshView();
+  });
+  doc("btnAddRouteColor").addEventListener("click", addRouteColor);
+
   // Sector modal
   doc("btnSaveSector").addEventListener("click", saveSector);
   doc("sectorRepeatMode").addEventListener("change", () => {
@@ -3539,6 +3574,97 @@ async function deleteNoteById() {
   }
 }
 
+// ─── Route Color Management ───────────────────────────────────────────────────
+async function openRouteColorModal() {
+  doc("routeColorModalOverlay").classList.remove("hidden");
+  await renderRouteColorList();
+}
+
+async function renderRouteColorList() {
+  const list = doc("routeColorList");
+  let colors;
+  try {
+    colors = await API.getRouteColors();
+  } catch {
+    list.innerHTML = '<p style="color:var(--text-secondary);">Lỗi tải dữ liệu</p>';
+    return;
+  }
+
+  if (colors.length === 0) {
+    list.innerHTML = '<p style="color:var(--text-secondary); text-align:center; padding:24px 0;">Chưa có màu chặng nào. Thêm mới ở trên.</p>';
+    return;
+  }
+
+  const isAdmin = state.userRole === "admin";
+  list.innerHTML = `
+    <table class="data-table" style="width:100%;">
+      <thead><tr>
+        <th>Chặng</th>
+        <th>Màu</th>
+        ${isAdmin ? "<th>Thao tác</th>" : ""}
+      </tr></thead>
+      <tbody>
+        ${colors.map(rc => `
+          <tr>
+            <td><strong>${rc.origin}</strong> → <strong>${rc.destination}</strong></td>
+            <td>
+              <span style="display:inline-block;width:32px;height:18px;border-radius:3px;background:${rc.color};vertical-align:middle;"></span>
+              <code style="margin-left:4px;font-size:12px;">${rc.color}</code>
+            </td>
+            ${isAdmin ? `
+              <td>
+                <button class="btn btn-danger btn-sm" onclick="deleteRouteColor(${rc.id})">
+                  <i class="fas fa-trash"></i>
+                </button>
+              </td>
+            ` : ""}
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+async function addRouteColor() {
+  if (state.userRole !== "admin") return;
+  const origin = doc("rcOrigin").value.trim().toUpperCase();
+  const dest = doc("rcDest").value.trim().toUpperCase();
+  const color = doc("rcColor").value;
+  if (!origin || !dest) {
+    alert("Vui lòng nhập sân bay đi và đến");
+    return;
+  }
+  try {
+    await API.createRouteColor({ origin, destination: dest, color });
+    doc("rcOrigin").value = "";
+    doc("rcDest").value = "";
+    // Reload state
+    const rcList = await API.getRouteColors();
+    state.routeColors = {};
+    for (const rc of rcList) state.routeColors[`${rc.origin}-${rc.destination}`] = rc.color;
+    await renderRouteColorList();
+    if (state.routeColorEnabled) refreshView();
+  } catch (err) {
+    alert("Lỗi: " + err.message);
+  }
+}
+
+async function deleteRouteColor(id) {
+  if (state.userRole !== "admin") return;
+  if (!confirm("Xoá màu chặng này?")) return;
+  try {
+    await API.deleteRouteColor(id);
+    // Reload state
+    const rcList = await API.getRouteColors();
+    state.routeColors = {};
+    for (const rc of rcList) state.routeColors[`${rc.origin}-${rc.destination}`] = rc.color;
+    await renderRouteColorList();
+    if (state.routeColorEnabled) refreshView();
+  } catch (err) {
+    alert("Lỗi: " + err.message);
+  }
+}
+
 // ─── Expose helpers used from inline onclick attributes ───────────────────────
 window.editTAT      = editTAT;
 window.deleteTAT    = deleteTAT;
@@ -3556,6 +3682,7 @@ window.openMaintenanceModal = openMaintenanceModal;
 window.openSwapModal        = openSwapModal;
 window.openPasteModal       = openPasteModal;
 window.openNoteModal        = openNoteModal;
+window.deleteRouteColor     = deleteRouteColor;
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", init);

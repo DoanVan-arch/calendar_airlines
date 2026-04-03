@@ -80,6 +80,16 @@ const API = (() => {
     updateNote: (id, d)          => req("PUT",    `/api/notes/${id}`, d),
     deleteNote: (id)             => req("DELETE", `/api/notes/${id}`),
 
+    // ── Route colors ────────────────────────────────────────
+    getRouteColors: ()           => req("GET",    "/api/rules/route-colors"),
+    createRouteColor: (d)        => req("POST",   "/api/rules/route-colors", d),
+    updateRouteColor: (id, d)    => req("PUT",    `/api/rules/route-colors/${id}`, d),
+    deleteRouteColor: (id)       => req("DELETE", `/api/rules/route-colors/${id}`),
+
+    // ── App settings ────────────────────────────────────────
+    getSetting: (key)            => req("GET",    `/api/rules/settings/${key}`),
+    setSetting: (key, value)     => req("PUT",    `/api/rules/settings/${key}`, { value }),
+
     // ── Export / Import ──────────────────────────────────────
     exportTimetable: (p)  => req("POST", "/api/export/timetable", p),
     exportReport: (p)     => req("POST", "/api/export/report", p),

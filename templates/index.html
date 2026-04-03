@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PikA - Pickleball Airways</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=24" />
+  <link rel="stylesheet" href="/static/css/style.css?v=26" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
 </head>
 <body>
@@ -18,9 +18,9 @@
 
   <div class="header-nav">
     <button class="icon-btn" id="btnPrevPeriod" title="Kỳ trước"><i class="fas fa-chevron-left"></i></button>
-    <input type="date" id="currentDate" />
+    <input type="date" id="currentDate" style="font-weight: bold; font-size: 14px;" />
     <button class="icon-btn" id="btnNextPeriod" title="Kỳ sau"><i class="fas fa-chevron-right"></i></button>
-    <span class="date-label" id="dateLabel"></span>
+    <span class="date-label" id="dateLabel" style="font-weight: bold; font-size: 14px;"></span>
     <div class="days-shown-ctrl" id="daysShownCtrl" title="Số ngày hiển thị trên Gantt">
       <label for="daysShownSelect"><i class="fas fa-calendar-week"></i></label>
       <select id="daysShownSelect">
@@ -73,6 +73,12 @@
   </div>
   <button class="btn btn-secondary" id="btnAuditLog" title="Lịch sử thay đổi"><i class="fas fa-history"></i> Lịch sử</button>
   <button class="btn btn-warning admin-only" id="btnAddMaintenance" title="Thêm bảo dưỡng tàu"><i class="fas fa-wrench"></i> Bảo dưỡng</button>
+  <div class="separator"></div>
+  <button class="btn btn-secondary" id="btnRouteColors" title="Quản lý màu chặng bay"><i class="fas fa-palette"></i> Màu chặng</button>
+  <label class="route-color-toggle" title="Bật/tắt màu theo chặng bay">
+    <input type="checkbox" id="chkRouteColorEnabled" />
+    <span class="toggle-slider"></span>
+  </label>
 </div>
 
 <!-- ═══════════════ MAIN LAYOUT ═══════════════ -->
@@ -255,13 +261,6 @@
           <label>Tàu bay *</label>
           <select id="chainAircraftId"></select>
         </div>
-        <div class="form-group">
-          <label>Số hiệu chuyến (gốc)</label>
-          <div class="input-prefix-wrap">
-            <span class="input-prefix">VU</span>
-            <input type="text" id="chainFlightNum" placeholder="100" maxlength="6" style="border-radius:0 6px 6px 0;" />
-          </div>
-        </div>
       </div>
       <div class="form-row">
         <div class="form-group">
@@ -293,13 +292,13 @@
         </div>
       </div>
       <div class="form-group">
-        <label>Chuỗi chặng bay (mỗi dòng: ĐIỂM ĐI-ĐIỂM ĐẾN) *</label>
-        <textarea id="chainRoutes" rows="6" placeholder="SGN-HAN&#10;HAN-SGN&#10;SGN-DAD&#10;DAD-SGN" style="font-family:monospace;font-size:13px;"></textarea>
+        <label>Chuỗi chặng bay (mỗi dòng: ĐIỂM ĐI - ĐIỂM ĐẾN | SỐ HIỆU) *</label>
+        <textarea id="chainRoutes" rows="6" placeholder="SGN-HAN | VU101&#10;HAN-SGN | VU102&#10;SGN-DAD | VU201&#10;DAD-SGN | VU202" style="font-family:monospace;font-size:13px;"></textarea>
       </div>
       <button class="btn btn-secondary" id="btnChainPreview"><i class="fas fa-eye"></i> Xem trước</button>
       <div id="chainPreviewBox" class="hidden" style="margin-top:12px;">
         <table class="data-table" style="font-size:12px;">
-          <thead><tr><th>#</th><th>Chặng</th><th>Dep (UTC)</th><th>Arr (UTC)</th><th>Block</th><th>TAT</th></tr></thead>
+          <thead><tr><th>#</th><th>Chặng</th><th>Chuyến</th><th>Dep (UTC)</th><th>Arr (UTC)</th><th>Block</th><th>TAT</th></tr></thead>
           <tbody id="chainPreviewBody"></tbody>
         </table>
         <div id="chainPreviewError" class="inline-warning hidden" style="margin-top:8px;"></div>
@@ -369,8 +368,9 @@
         <button class="tab-btn" data-tab="tabBlockTime">Block Time</button>
         <button class="tab-btn" data-tab="tabAirports">Sân bay</button>
         <button class="tab-btn" data-tab="tabRegistration">Registration</button>
-        <button class="tab-btn admin-only" data-tab="tabUsers">Người dùng</button>
+        
         <button class="tab-btn admin-only" data-tab="tabSeasons">Mùa bay</button>
+        <button class="tab-btn admin-only" data-tab="tabUsers">Người dùng</button>
       </div>
 
       <!-- TAT tab -->
@@ -447,7 +447,7 @@
           <button class="btn btn-secondary btn-sm" id="btnExportRegCsv"><i class="fas fa-file-csv"></i> Xuất CSV</button>
         </div>
         <table class="data-table" id="regTable">
-          <thead><tr><th>Số đăng bạ</th><th>Mẫu máy bay</th><th>Số ghế</th><th>D/W</th><th>MTOW</th><th class="admin-only"></th></tr></thead>
+          <thead><tr><th>Số đăng bạ</th><th>Mẫu máy bay</th><th>Số ghế</th><th>D/W</th><th>MTOW (Tấn)</th><th class="admin-only"></th></tr></thead>
           <tbody id="regTableBody"></tbody>
         </table>
         <div class="inline-form hidden" id="regForm">
@@ -977,6 +977,36 @@
   </div>
 </div>
 
+<!-- Route Color Management Modal -->
+<div class="modal-overlay hidden" id="routeColorModalOverlay">
+  <div class="modal modal-md" id="routeColorModal">
+    <div class="modal-header">
+      <h2><i class="fas fa-palette"></i> Màu theo chặng bay</h2>
+      <button class="close-btn" data-close="routeColorModalOverlay"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <p style="margin-bottom:12px; color: var(--text-secondary); font-size:13px;">
+        Gán màu cho từng chặng bay (VD: HAN-SGN = đỏ). Khi bật, màu chặng sẽ được ưu tiên hơn màu line.
+      </p>
+      <div class="route-color-form admin-only" style="display:flex; gap:8px; align-items:center; margin-bottom:12px;">
+        <input type="text" id="rcOrigin" placeholder="Đi (VD: HAN)" maxlength="10"
+               style="width:80px; text-transform:uppercase;" class="input" />
+        <span style="color:var(--text-secondary);">→</span>
+        <input type="text" id="rcDest" placeholder="Đến (VD: SGN)" maxlength="10"
+               style="width:80px; text-transform:uppercase;" class="input" />
+        <input type="color" id="rcColor" value="#ef4444" style="width:40px; height:32px; cursor:pointer;" />
+        <button class="btn btn-primary btn-sm" id="btnAddRouteColor"><i class="fas fa-plus"></i> Thêm</button>
+      </div>
+      <div class="route-color-list" id="routeColorList" style="max-height:400px; overflow-y:auto;">
+        <!-- Populated by JS -->
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="routeColorModalOverlay">Đóng</button>
+    </div>
+  </div>
+</div>
+
 <!-- Generic confirm modal (replaces native confirm() to avoid ghost-click bugs) -->
 <div class="modal-overlay hidden" id="confirmModalOverlay">
   <div class="modal modal-sm">
@@ -994,9 +1024,9 @@
 </div>
 
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-<script src="/static/js/api.js?v=24"></script>
-<script src="/static/js/history.js?v=24"></script>
-<script src="/static/js/gantt.js?v=24"></script>
-<script src="/static/js/app.js?v=24"></script>
+<script src="/static/js/api.js?v=26"></script>
+<script src="/static/js/history.js?v=26"></script>
+<script src="/static/js/gantt.js?v=26"></script>
+<script src="/static/js/app.js?v=26"></script>
 </body>
 </html>

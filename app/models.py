@@ -122,3 +122,20 @@ class CalendarNote(Base):
     end_time = Column(String(5), nullable=True)      # HH:MM (optional)
     content = Column(String(1000), nullable=False)
     color = Column(String(20), nullable=True, default="#3b82f6")
+
+
+class RouteColor(Base):
+    """Color override per route (origin-destination pair)."""
+    __tablename__ = "route_colors"
+    __table_args__ = (UniqueConstraint("origin", "destination"),)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    origin = Column(String(10), nullable=False)
+    destination = Column(String(10), nullable=False)
+    color = Column(String(20), nullable=False)  # hex color e.g. "#ef4444"
+
+
+class AppSetting(Base):
+    """Simple key-value app settings."""
+    __tablename__ = "app_settings"
+    key = Column(String(100), primary_key=True)
+    value = Column(String(500), nullable=True)

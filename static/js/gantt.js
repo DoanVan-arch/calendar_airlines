@@ -134,6 +134,7 @@ class GanttChart {
       warnings   : this._lastWarnings || [],
       maintenance: this._maintenance,
       currentDate: this._currentDate,
+      routeColors: this._routeColorMap,
     });
   }
 
@@ -150,7 +151,7 @@ class GanttChart {
   }
 
   // ── Public render ───────────────────────────────────────────────────────────
-  render({ aircraft, sectors, airports, timezone, warnings, maintenance, currentDate, prevDayLast }) {
+  render({ aircraft, sectors, airports, timezone, warnings, maintenance, currentDate, prevDayLast, routeColors }) {
     this._aircraft    = aircraft;
     this._sectors     = sectors;
     this._airports    = airports;
@@ -159,6 +160,7 @@ class GanttChart {
     this._currentDate = currentDate || "";
     this._lastWarnings = warnings || [];
     this._prevDayLast = prevDayLast || {}; // aircraft_id → last sector of previous day
+    this._routeColorMap = routeColors || null; // "ORIG-DEST" → color (null = disabled)
 
     // Build aircraft color map: acId → color (null if not set)
     this._acColorMap = {};
@@ -664,7 +666,10 @@ class GanttChart {
     el.style.left  = left  + "px";
     el.style.width = width + "px";
 
-    const bg = sector.color
+    const rcKey = `${sector.origin}-${sector.destination}`;
+    // When route coloring is enabled, route color takes top priority (overrides sector & aircraft colors)
+    const bg = (this._routeColorMap && this._routeColorMap[rcKey])
+      || sector.color
       || (this._acColorMap && this._acColorMap[sector.aircraft_id])
       || routeColor(sector.origin, sector.destination);
     el.style.background = (sector.status === "cancelled")

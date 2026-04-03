@@ -8,12 +8,13 @@ import datetime
 import openpyxl
 
 from ..database import get_db
-from ..models import TATRule, BlockTimeRule, Airport, Registration
+from ..models import TATRule, BlockTimeRule, Airport, Registration, RouteColor, AppSetting
 from ..schemas import (
     TATRuleCreate, TATRuleOut,
     BlockTimeRuleCreate, BlockTimeRuleOut,
     AirportCreate, AirportOut,
     RegistrationCreate, RegistrationUpdate, RegistrationOut,
+    RouteColorCreate, RouteColorOut,
 )
 
 router = APIRouter()
@@ -467,3 +468,70 @@ async def import_registration_excel(file: UploadFile = File(...), db: Session = 
 
     db.commit()
     return {"imported": imported}
+
+
+# ── Route Colors ───────────────────────────────────────────────────────────────
+@router.get("/route-colors", response_model=List[RouteColorOut])
+def list_route_colors(db: Session = Depends(get_db)):
+    return db.query(RouteColor).order_by(RouteColor.origin, RouteColor.destination).all()
+
+
+@router.post("/route-colors", response_model=RouteColorOut, status_code=201)
+def create_route_color(payload: RouteColorCreate, db: Session = Depends(get_db)):
+    orig = payload.origin.upper().strip()
+    dest = payload.destination.upper().strip()
+    existing = db.query(RouteColor).filter(
+        RouteColor.origin == orig, RouteColor.destination == dest
+    ).first()
+    if existing:
+        # Update color if route already exists
+        existing.color = payload.color
+        db.commit()
+        db.refresh(existing)
+        return existing
+    rc = RouteColor(origin=orig, destination=dest, color=payload.color)
+    db.add(rc)
+    db.commit()
+    db.refresh(rc)
+    return rc
+
+
+@router.put("/route-colors/{rc_id}", response_model=RouteColorOut)
+def update_route_color(rc_id: int, payload: RouteColorCreate, db: Session = Depends(get_db)):
+    rc = db.query(RouteColor).filter(RouteColor.id == rc_id).first()
+    if not rc:
+        raise HTTPException(404, "Route color not found")
+    rc.origin = payload.origin.upper().strip()
+    rc.destination = payload.destination.upper().strip()
+    rc.color = payload.color
+    db.commit()
+    db.refresh(rc)
+    return rc
+
+
+@router.delete("/route-colors/{rc_id}", status_code=204)
+def delete_route_color(rc_id: int, db: Session = Depends(get_db)):
+    rc = db.query(RouteColor).filter(RouteColor.id == rc_id).first()
+    if not rc:
+        raise HTTPException(404, "Route color not found")
+    db.delete(rc)
+    db.commit()
+
+
+# ── App Settings ───────────────────────────────────────────────────────────────
+@router.get("/settings/{key}")
+def get_setting(key: str, db: Session = Depends(get_db)):
+    s = db.query(AppSetting).filter(AppSetting.key == key).first()
+    return {"key": key, "value": s.value if s else None}
+
+
+@router.put("/settings/{key}")
+def set_setting(key: str, payload: dict, db: Session = Depends(get_db)):
+    value = payload.get("value")
+    s = db.query(AppSetting).filter(AppSetting.key == key).first()
+    if s:
+        s.value = value
+    else:
+        db.add(AppSetting(key=key, value=value))
+    db.commit()
+    return {"key": key, "value": value}
