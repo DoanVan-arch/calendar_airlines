@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PikA - Pickleball Airways</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=26" />
+  <link rel="stylesheet" href="/static/css/style.css?v=30" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
 </head>
 <body>
@@ -48,8 +48,6 @@
       <button class="tz-btn active" id="btnLCT">LCT</button>
       <button class="tz-btn" id="btnUTC">UTC</button>
     </div>
-    <button class="icon-btn" id="btnUndo" title="Undo (Ctrl+Z)" disabled><i class="fas fa-undo"></i></button>
-    <button class="icon-btn" id="btnRedo" title="Redo (Ctrl+Y)" disabled><i class="fas fa-redo"></i></button>
     <button class="icon-btn" id="btnLogout" title="Đăng xuất"><i class="fas fa-sign-out-alt"></i></button>
   </div>
 </header>
@@ -79,6 +77,9 @@
     <input type="checkbox" id="chkRouteColorEnabled" />
     <span class="toggle-slider"></span>
   </label>
+  <div class="separator"></div>
+  <button class="icon-btn" id="btnUndo" title="Undo (Ctrl+Z)" disabled><i class="fas fa-undo"></i></button>
+  <button class="icon-btn" id="btnRedo" title="Redo (Ctrl+Y)" disabled><i class="fas fa-redo"></i></button>
 </div>
 
 <!-- ═══════════════ MAIN LAYOUT ═══════════════ -->
@@ -293,7 +294,7 @@
       </div>
       <div class="form-group">
         <label>Chuỗi chặng bay (mỗi dòng: ĐIỂM ĐI - ĐIỂM ĐẾN | SỐ HIỆU) *</label>
-        <textarea id="chainRoutes" rows="6" placeholder="SGN-HAN | VU101&#10;HAN-SGN | VU102&#10;SGN-DAD | VU201&#10;DAD-SGN | VU202" style="font-family:monospace;font-size:13px;"></textarea>
+        <textarea id="chainRoutes" rows="6" placeholder="SGN-HAN.VU101&#10;HAN-SGN.VU102&#10;SGN-DAD.VU201&#10;DAD-SGN.VU202" style="font-family:monospace;font-size:13px;"></textarea>
       </div>
       <button class="btn btn-secondary" id="btnChainPreview"><i class="fas fa-eye"></i> Xem trước</button>
       <div id="chainPreviewBox" class="hidden" style="margin-top:12px;">
@@ -423,18 +424,6 @@
           <thead><tr><th>Mã (IATA)</th><th>Tên sân bay</th><th>Múi giờ (UTC+)</th><th>Loại</th><th class="admin-only"></th></tr></thead>
           <tbody id="airportTableBody"></tbody>
         </table>
-        <div class="inline-form hidden" id="airportForm">
-          <input type="hidden" id="apCode" />
-          <input type="text" id="apCodeInput" placeholder="SGN" maxlength="3" class="uppercase" style="width:80px" />
-          <input type="text" id="apName" placeholder="Tên sân bay" style="flex:1" />
-          <input type="number" id="apTZ" step="0.5" min="-12" max="14" placeholder="7" style="width:80px" />
-          <select id="apType" style="width:110px">
-            <option value="domestic">Nội địa</option>
-            <option value="international">Quốc tế</option>
-          </select>
-          <button class="btn btn-primary btn-sm" id="btnSaveAirport">Lưu</button>
-          <button class="btn btn-secondary btn-sm" id="btnCancelAirport">Huỷ</button>
-        </div>
       </div>
 
       <!-- Registration tab -->
@@ -450,20 +439,6 @@
           <thead><tr><th>Số đăng bạ</th><th>Mẫu máy bay</th><th>Số ghế</th><th>D/W</th><th>MTOW (Tấn)</th><th class="admin-only"></th></tr></thead>
           <tbody id="regTableBody"></tbody>
         </table>
-        <div class="inline-form hidden" id="regForm">
-          <input type="hidden" id="regId" />
-          <input type="text" id="regNumber" placeholder="VN-A123" class="uppercase" style="width:120px" />
-          <input type="text" id="regModel" placeholder="Airbus 321" style="flex:1" />
-          <input type="number" id="regSeats" min="1" max="600" placeholder="200" style="width:80px" />
-          <select id="regDW" style="width:80px">
-            <option value="">-</option>
-            <option value="Dry">Dry</option>
-            <option value="Wet">Wet</option>
-          </select>
-          <input type="number" id="regMTOW" step="0.1" min="0" placeholder="MTOW" style="width:90px" />
-          <button class="btn btn-primary btn-sm" id="btnSaveReg">Lưu</button>
-          <button class="btn btn-secondary btn-sm" id="btnCancelReg">Huỷ</button>
-        </div>
       </div>
 
       <!-- Users tab (admin only) -->
@@ -812,6 +787,83 @@
 </div>
 
 <!-- User Form Modal -->
+<!-- Airport form modal -->
+<div class="modal-overlay hidden" id="airportFormModal">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2 id="airportFormTitle">Thêm sân bay</h2>
+      <button class="close-btn" data-close="airportFormModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="apCode" />
+      <div class="form-group">
+        <label>Mã IATA <span class="required">*</span></label>
+        <input type="text" id="apCodeInput" placeholder="SGN" maxlength="3" class="uppercase" />
+      </div>
+      <div class="form-group">
+        <label>Tên sân bay <span class="required">*</span></label>
+        <input type="text" id="apName" placeholder="Tân Sơn Nhất" />
+      </div>
+      <div class="form-group">
+        <label>Múi giờ (UTC+) <span class="required">*</span></label>
+        <input type="number" id="apTZ" step="0.5" min="-12" max="14" placeholder="7" />
+      </div>
+      <div class="form-group">
+        <label>Loại</label>
+        <select id="apType">
+          <option value="domestic">Nội địa</option>
+          <option value="international">Quốc tế</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="airportFormModal">Huỷ</button>
+      <button class="btn btn-primary" id="btnSaveAirport">Lưu</button>
+    </div>
+  </div>
+</div>
+
+<!-- Registration form modal -->
+<div class="modal-overlay hidden" id="regFormModal">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2 id="regFormTitle">Thêm Registration</h2>
+      <button class="close-btn" data-close="regFormModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="regId" />
+      <div class="form-group">
+        <label>Số đăng bạ <span class="required">*</span></label>
+        <input type="text" id="regNumber" placeholder="VN-A123" class="uppercase" />
+      </div>
+      <div class="form-group">
+        <label>Mẫu máy bay <span class="required">*</span></label>
+        <input type="text" id="regModel" placeholder="Airbus 321" />
+      </div>
+      <div class="form-group">
+        <label>Số ghế <span class="required">*</span></label>
+        <input type="number" id="regSeats" min="1" max="600" placeholder="200" />
+      </div>
+      <div class="form-group">
+        <label>D/W</label>
+        <select id="regDW">
+          <option value="">-</option>
+          <option value="Dry">Dry</option>
+          <option value="Wet">Wet</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>MTOW (Tấn)</label>
+        <input type="number" id="regMTOW" step="0.1" min="0" placeholder="MTOW" />
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="regFormModal">Huỷ</button>
+      <button class="btn btn-primary" id="btnSaveReg">Lưu</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay hidden" id="userFormModal">
   <div class="modal modal-sm">
     <div class="modal-header">
@@ -1024,9 +1076,9 @@
 </div>
 
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-<script src="/static/js/api.js?v=26"></script>
-<script src="/static/js/history.js?v=26"></script>
-<script src="/static/js/gantt.js?v=26"></script>
-<script src="/static/js/app.js?v=26"></script>
+<script src="/static/js/api.js?v=30"></script>
+<script src="/static/js/history.js?v=30"></script>
+<script src="/static/js/gantt.js?v=30"></script>
+<script src="/static/js/app.js?v=30"></script>
 </body>
 </html>

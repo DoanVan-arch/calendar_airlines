@@ -68,6 +68,14 @@ def update_aircraft(aircraft_id: int, payload: AircraftUpdate, db: Session = Dep
     if not ac:
         raise HTTPException(404, "Aircraft not found")
     data = payload.model_dump(exclude_unset=True)
+    # Prevent duplicate registration on rename
+    if "registration" in data and data["registration"] != ac.registration:
+        dup = db.query(Aircraft).filter(
+            Aircraft.registration == data["registration"],
+            Aircraft.id != aircraft_id,
+        ).first()
+        if dup:
+            raise HTTPException(400, f"Registration '{data['registration']}' already exists")
     for field, value in data.items():
         setattr(ac, field, value)
     db.commit()

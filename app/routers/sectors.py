@@ -444,4 +444,37 @@ def get_warnings(
                         ),
                     })
 
+    # ── Duplicate flight number check (across ALL aircraft on this date) ─────
+    all_day_sectors = (
+        db.query(FlightSector)
+        .filter(
+            FlightSector.flight_date == date,
+            FlightSector.status == "active",
+            FlightSector.flight_number.isnot(None),
+            FlightSector.flight_number != "",
+        )
+        .all()
+    )
+    ac_map = {ac.id: ac.registration for ac in aircraft_list}
+    fn_groups: dict = {}
+    for s in all_day_sectors:
+        fn_groups.setdefault(s.flight_number, []).append(s)
+    for fn, group in fn_groups.items():
+        if len(group) > 1:
+            for s in group:
+                others = [
+                    f"{ac_map.get(o.aircraft_id, '?')} {o.origin}→{o.destination} {o.dep_utc}"
+                    for o in group if o.id != s.id
+                ]
+                warnings.append({
+                    "type": "DUPLICATE_FN",
+                    "severity": "warning",
+                    "sector_id": s.id,
+                    "aircraft": ac_map.get(s.aircraft_id, "?"),
+                    "message": (
+                        f"{ac_map.get(s.aircraft_id, '?')} | Số hiệu {fn} trùng trong ngày {date}: "
+                        + ", ".join(others)
+                    ),
+                })
+
     return {"date": date, "warnings": warnings}

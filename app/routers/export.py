@@ -7,7 +7,7 @@ from collections import defaultdict
 import json
 
 from ..database import get_db
-from ..models import FlightSector, Aircraft, Airport, BlockTimeRule, TATRule
+from ..models import FlightSector, Aircraft, Airport, BlockTimeRule, TATRule, Registration
 from ..schemas import TimetableExportParams, ReportParams, ImportPayload
 
 router = APIRouter()
@@ -95,8 +95,8 @@ def compress_dates(date_strings: List[str]) -> str:
 
     parts = []
     for s, e in ranges:
-        s_fmt = datetime.strptime(s, "%Y-%m-%d").strftime("%d%b").upper()
-        e_fmt = datetime.strptime(e, "%Y-%m-%d").strftime("%d%b").upper()
+        s_fmt = datetime.strptime(s, "%Y-%m-%d").strftime("%d%b%y").upper()
+        e_fmt = datetime.strptime(e, "%Y-%m-%d").strftime("%d%b%y").upper()
         if s == e:
             parts.append(s_fmt)
         else:
@@ -121,11 +121,17 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
     airports = {ap.code: ap for ap in db.query(Airport).all()}
     aircraft_map = {ac.id: ac for ac in db.query(Aircraft).all()}
 
+    # Build registration map for seats lookup
+    reg_map = {reg.id: reg for reg in db.query(Registration).all()}
+
     rows = [fmt_display(s, params.timezone, airports) for s in sectors]
     for r in rows:
         ac = aircraft_map.get(r["aircraft_id"])
         r["aircraft_reg"] = ac.registration if ac else "?"
         r["line_order"] = ac.line_order if ac else 0
+        # Seats from linked registration
+        reg = reg_map.get(ac.registration_id) if ac and ac.registration_id else None
+        r["seats"] = reg.seats if reg else 0
 
     if params.mode == "daily":
         # Merge identical sectors: group by (aircraft_id, route, dep_utc, arr_utc, flight_number)
@@ -149,6 +155,7 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
             r["day_of_week"] = "".join(str(d) for d in dows_sorted)
             r["date_range"] = compress_dates(grp["dates"])
             r["flight_count"] = len(grp["dates"])
+            r["total_seats"] = r["seats"] * r["flight_count"]
             merged_rows.append(r)
 
         # Default sort: by aircraft (line_order), then by dep time (like Gantt line order)
@@ -160,12 +167,14 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
         return {"mode": "daily", "timezone": params.timezone, "rows": merged_rows}
 
     # GROUP mode – group by (origin, destination, dep_display [UTC hour:min key])
-    grouped: dict = defaultdict(lambda: {"dates": [], "aircraft": set(), "dows": set()})
+    grouped: dict = defaultdict(lambda: {"dates": [], "aircraft": set(), "dows": set(), "total_seats": 0, "min_line_order": 9999})
     for r in rows:
         key = f"{r['origin']}-{r['destination']}|{r['dep_utc']}|{r['arr_utc']}"
         grouped[key]["dates"].append(r["flight_date"])
         grouped[key]["aircraft"].add(r["aircraft_reg"])
         grouped[key]["dows"].add(int(r["day_of_week"]))
+        grouped[key]["total_seats"] += r["seats"]
+        grouped[key]["min_line_order"] = min(grouped[key]["min_line_order"], r.get("line_order", 0))
         grouped[key].update({
             "origin": r["origin"],
             "destination": r["destination"],
@@ -197,6 +206,8 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
             "aircraft": sorted(grp["aircraft"]),
             "day_of_week": day_str,
             "timezone": params.timezone,
+            "total_seats": grp["total_seats"],
+            "line_order": grp["min_line_order"],
         })
 
     group_rows.sort(key=lambda r: (r["origin"], r["destination"], r["dep_utc"]))
@@ -220,6 +231,7 @@ def export_report(params: ReportParams, db: Session = Depends(get_db)):
     airports = {ap.code: ap for ap in db.query(Airport).all()}
     aircraft_list = db.query(Aircraft).order_by(Aircraft.line_order, Aircraft.id).all()
     aircraft_map = {ac.id: ac for ac in aircraft_list}
+    reg_map = {reg.id: reg for reg in db.query(Registration).all()}
 
     # Compute block hours per aircraft
     per_aircraft: dict = defaultdict(lambda: {"block_minutes": 0, "sector_count": 0})
@@ -244,6 +256,8 @@ def export_report(params: ReportParams, db: Session = Depends(get_db)):
     for ac in aircraft_list:
         data = per_aircraft.get(ac.id, {"block_minutes": 0, "sector_count": 0})
         bm = data["block_minutes"]
+        reg = reg_map.get(ac.registration_id) if ac.registration_id else None
+        ac_seats = reg.seats if reg else 0
         aircraft_rows.append({
             "line_order": ac.line_order,
             "aircraft_id": ac.id,
@@ -253,6 +267,8 @@ def export_report(params: ReportParams, db: Session = Depends(get_db)):
             "total_block_minutes": bm,
             "sector_count": data["sector_count"],
             "avg_daily_block_hours": round(bm / 60 / period_days, 2),
+            "seats": ac_seats,
+            "total_seats": ac_seats * data["sector_count"],
         })
 
     # Averages

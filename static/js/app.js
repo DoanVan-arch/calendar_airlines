@@ -72,6 +72,12 @@ function formatBH(minutes) {
   return `${h}h${String(m).padStart(2,"0")}m`;
 }
 
+function minToHHMM(minutes) {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
+}
+
 /**
  * Check if a proposed sector overlaps any existing active sector
  * on the same aircraft & date. Returns true if overlap found.
@@ -117,11 +123,12 @@ function downloadExcel(data, filename) {
       "Điểm đến":   r.destination,
       [`Cất (${data.timezone})`]:  r.dep_display,
       [`Hạ (${data.timezone})`]:   r.arr_display,
-      "Block (phút)": r.block_time_minutes,
+      "Block":       minToHHMM(r.block_time_minutes),
       "DAY":         r.day_of_week || "",
       "Chuyến":      r.flight_number || "",
       "Ngày bay":    r.date_range || r.flight_date || "",
       "Số CB":       r.flight_count || 1,
+      "Ghế":         r.total_seats || 0,
     }));
   } else {
     rows = data.rows.map(r => ({
@@ -130,10 +137,11 @@ function downloadExcel(data, filename) {
       "Điểm đến":   r.destination,
       [`Cất (${data.timezone})`]:  r.dep_display,
       [`Hạ (${data.timezone})`]:   r.arr_display,
-      "Block (phút)": r.block_time_minutes,
+      "Block":       minToHHMM(r.block_time_minutes),
       "DAY":         r.day_of_week || "",
       "Ngày bay":    r.date_range,
       "Số CB":       r.flight_count,
+      "Ghế":         r.total_seats || 0,
       "Tàu":         r.aircraft.join(", "),
     }));
   }
@@ -809,7 +817,14 @@ async function refreshWeekView() {
           const depDisp = state.timezone === "LCT"
             ? applyTZDisplay(s.dep_utc, s.origin)
             : s.dep_utc;
-          pill.style.background = routeColorFromSector(s);
+          const sColor = routeColorFromSector(s);
+          pill.style.borderLeft = `4px solid ${sColor}`;
+          pill.style.background = sColor;
+          const pillTxt = getContrastColor(sColor);
+          pill.style.color = pillTxt;
+          pill.style.textShadow = pillTxt === "#000"
+            ? "0 1px 2px rgba(255,255,255,0.3)"
+            : "0 1px 2px rgba(0,0,0,0.5)";
           pill.textContent = `${s.origin}→${s.destination} ${depDisp}`;
           pill.title = `${s.origin}→${s.destination}  ${s.dep_utc}–${s.arr_utc} UTC${s.flight_number ? "  " + s.flight_number : ""}`;
           pill.addEventListener("click", e => {
@@ -1358,8 +1373,8 @@ function _parseChainRoutes() {
   return text.split(/\n/).map(line => {
     const clean = line.trim().toUpperCase();
     if (!clean) return null;
-    // Format: SGN-HAN | VU101  or  SGN-HAN  (flight number optional)
-    const parts = clean.split(/\|/);
+    // Format: SGN-HAN.VU101  or  SGN-HAN  (flight number optional, separated by .)
+    const parts = clean.split(/\./);
     const routePart = parts[0].trim();
     const fnPart = parts[1] ? parts[1].trim() : null;
     const m = routePart.match(/^([A-Z]{3})\s*[-–→>]\s*([A-Z]{3})$/);
@@ -2136,7 +2151,8 @@ function editReg(id, registration, model, seats, dw, mtow) {
   doc("regSeats").value = seats;
   doc("regDW").value = dw || "";
   doc("regMTOW").value = mtow != null ? mtow : "";
-  doc("regForm").classList.remove("hidden");
+  doc("regFormTitle").textContent = "Chỉnh sửa Registration";
+  doc("regFormModal").classList.remove("hidden");
 }
 
 async function deleteReg(id) {
@@ -2164,7 +2180,7 @@ async function saveReg() {
     if (id) await API.updateRegistration(parseInt(id, 10), data);
     else await API.createRegistration(data);
     
-    doc("regForm").classList.add("hidden");
+    doc("regFormModal").classList.add("hidden");
     doc("regId").value = "";
     doc("regNumber").value = "";
     doc("regModel").value = "";
@@ -2295,7 +2311,8 @@ function editAirport(code, name, tz) {
   doc("apName").value = name;
   doc("apTZ").value = tz;
   doc("apType").value = tz === 7 ? "domestic" : "international";
-  doc("airportForm").classList.remove("hidden");
+  doc("airportFormTitle").textContent = "Chỉnh sửa sân bay";
+  doc("airportFormModal").classList.remove("hidden");
 }
 
 async function deleteAirport(code) {
@@ -2315,7 +2332,7 @@ async function saveAirport() {
   try {
     if (existing) await API.updateAirport(existing, { code, name, timezone_offset: tz });
     else          await API.createAirport({ code, name, timezone_offset: tz });
-    doc("airportForm").classList.add("hidden");
+    doc("airportFormModal").classList.add("hidden");
     doc("apCodeInput").disabled = false;
     doc("apCode").value = "";
     state.airports = Object.fromEntries((await API.getAirports()).map(ap => [ap.code, ap]));
@@ -2388,10 +2405,30 @@ function renderTimetableTable(data) {
       if (!d || !d.rows || d.rows.length === 0) return;
       const sorted = [...d.rows];
       if (sortMode === "route") {
+        // Pair routes together, then sub-group by aircraft within each pair
+        // e.g. BKK-HAN (tàu A), HAN-BKK (tàu A), BKK-HAN (tàu B), HAN-BKK (tàu B), ...
+        const _pairKey = (r) => {
+          const o = r.origin || r.route.split("-")[0];
+          const d = r.destination || r.route.split("-")[1];
+          return [o, d].sort().join("-");
+        };
+        const _isOutbound = (r) => {
+          const o = r.origin || r.route.split("-")[0];
+          const d = r.destination || r.route.split("-")[1];
+          return o < d ? 0 : 1; // outbound (alphabetically first origin) = 0, return = 1
+        };
         sorted.sort((a, b) => {
-          const routeA = (a.route || `${a.origin}-${a.destination}`);
-          const routeB = (b.route || `${b.origin}-${b.destination}`);
-          if (routeA !== routeB) return routeA.localeCompare(routeB);
+          const pkA = _pairKey(a);
+          const pkB = _pairKey(b);
+          if (pkA !== pkB) return pkA.localeCompare(pkB);
+          // Sub-group by aircraft within the same route pair
+          const acA = a.aircraft_reg || "";
+          const acB = b.aircraft_reg || "";
+          if (acA !== acB) return acA.localeCompare(acB);
+          // Outbound before return within same aircraft
+          const obA = _isOutbound(a);
+          const obB = _isOutbound(b);
+          if (obA !== obB) return obA - obB;
           return (a.dep_utc || "").localeCompare(b.dep_utc || "");
         });
       } else {
@@ -2427,29 +2464,31 @@ function _renderTTRows(container, data) {
     const hdr = `<tr>
       <th>Tàu</th><th>Chặng bay</th><th>Điểm đi</th><th>Điểm đến</th>
       <th>Cất (${data.timezone})</th><th>Hạ (${data.timezone})</th>
-      <th>Block (phút)</th><th>DAY</th><th>Chuyến</th><th>Ngày bay</th><th>Số CB</th></tr>`;
+      <th>Block</th><th>DAY</th><th>Chuyến</th><th>Ngày bay</th><th>Số CB</th><th>Ghế</th></tr>`;
     const rows = data.rows.map(r => `<tr>
       <td>${r.aircraft_reg}</td>
       <td>${r.route || r.origin + "-" + r.destination}</td>
       <td>${r.origin}</td><td>${r.destination}</td>
       <td>${r.dep_display}</td><td>${r.arr_display}</td>
-      <td>${r.block_time_minutes}</td><td>${r.day_of_week}</td>
+      <td>${minToHHMM(r.block_time_minutes)}</td><td>${r.day_of_week}</td>
       <td>${r.flight_number || ""}</td>
       <td>${r.date_range || r.flight_date || ""}</td>
-      <td>${r.flight_count || 1}</td></tr>`).join("");
+      <td>${r.flight_count || 1}</td>
+      <td>${r.total_seats || 0}</td></tr>`).join("");
     container.insertAdjacentHTML("beforeend",
       `<table class="tt-table"><thead>${hdr}</thead><tbody>${rows}</tbody></table>`);
   } else {
     const hdr = `<tr>
       <th>Chặng bay</th><th>Điểm đi</th><th>Điểm đến</th>
       <th>Cất (${data.timezone})</th><th>Hạ (${data.timezone})</th>
-      <th>Block (phút)</th><th>DAY</th><th>Ngày bay</th><th>Số CB</th><th>Tàu</th></tr>`;
+      <th>Block</th><th>DAY</th><th>Ngày bay</th><th>Số CB</th><th>Ghế</th><th>Tàu</th></tr>`;
     const rows = data.rows.map(r => `<tr>
       <td>${r.route || r.origin + "-" + r.destination}</td>
       <td>${r.origin}</td><td>${r.destination}</td>
       <td>${r.dep_display}</td><td>${r.arr_display}</td>
-      <td>${r.block_time_minutes}</td><td>${r.day_of_week}</td>
+      <td>${minToHHMM(r.block_time_minutes)}</td><td>${r.day_of_week}</td>
       <td>${r.date_range}</td><td>${r.flight_count}</td>
+      <td>${r.total_seats || 0}</td>
       <td>${r.aircraft.join(", ")}</td></tr>`).join("");
     container.insertAdjacentHTML("beforeend",
       `<table class="tt-table"><thead>${hdr}</thead><tbody>${rows}</tbody></table>`);
@@ -2506,11 +2545,11 @@ function renderReport(data) {
   let table = "";
   if (data.sort_by === "aircraft" && data.aircraft_rows) {
     const hdr = `<tr><th>#</th><th>Tàu</th><th>Loại</th>
-      <th>Total BH</th><th>BH/ngày</th><th>Số chặng</th></tr>`;
+      <th>Total BH</th><th>BH/ngày</th><th>Số chặng</th><th>Ghế/chặng</th><th>Tổng ghế</th></tr>`;
     const rows = data.aircraft_rows.map(r => `<tr>
       <td>${r.line_order}</td><td><strong>${r.registration}</strong></td><td>${r.name}</td>
       <td>${r.total_block_hours}h</td><td>${r.avg_daily_block_hours}h</td>
-      <td>${r.sector_count}</td></tr>`).join("");
+      <td>${r.sector_count}</td><td>${r.seats || 0}</td><td>${r.total_seats || 0}</td></tr>`).join("");
     table = `<table class="tt-table"><thead>${hdr}</thead><tbody>${rows}</tbody></table>`;
   } else if (data.route_rows) {
     const hdr = `<tr><th>Đường bay</th><th>Total BH</th><th>Số chặng</th><th>Ngày bay</th></tr>`;
@@ -3374,10 +3413,11 @@ function bindUI() {
     doc("regModel").value = "";
     doc("regSeats").value = "";
     doc("regDW").value = "";
-    doc("regForm").classList.remove("hidden");
+    doc("regMTOW").value = "";
+    doc("regFormTitle").textContent = "Thêm Registration";
+    doc("regFormModal").classList.remove("hidden");
   });
   doc("btnSaveReg").addEventListener("click", saveReg);
-  doc("btnCancelReg").addEventListener("click", () => doc("regForm").classList.add("hidden"));
   doc("btnExportRegExcel").addEventListener("click", () => { window.location.href = "/api/rules/registration/export/excel"; });
   doc("btnImportRegExcel").addEventListener("click", () => doc("regFileInput").click());
   doc("regFileInput").addEventListener("change", importRegExcel);
@@ -3426,13 +3466,10 @@ function bindUI() {
     doc("apName").value = "";
     doc("apTZ").value = "7";
     doc("apType").value = "domestic";
-    doc("airportForm").classList.remove("hidden");
+    doc("airportFormTitle").textContent = "Thêm sân bay";
+    doc("airportFormModal").classList.remove("hidden");
   });
   doc("btnSaveAirport").addEventListener("click", saveAirport);
-  doc("btnCancelAirport").addEventListener("click", () => {
-    doc("airportForm").classList.add("hidden");
-    doc("apCodeInput").disabled = false;
-  });
 
   // Export modal
   doc("btnRunExport").addEventListener("click", runExport);

@@ -35,6 +35,42 @@ function applyTZ(hhmm, offsetHours) {
   return minToTime(timeToMin(hhmm) + Math.round(offsetHours * 60));
 }
 
+/** Convert any CSS colour (hex, rgb, etc.) to rgba() with given alpha */
+function hexToRGBA(color, alpha) {
+  // Handle hex colors
+  if (color.startsWith("#")) {
+    let hex = color.slice(1);
+    if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
+    const r = parseInt(hex.slice(0,2), 16);
+    const g = parseInt(hex.slice(2,4), 16);
+    const b = parseInt(hex.slice(4,6), 16);
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+  // Handle rgb/rgba strings
+  const m = color.match(/(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+  if (m) return `rgba(${m[1]},${m[2]},${m[3]},${alpha})`;
+  // Fallback
+  return color;
+}
+
+/** Return "#000" or "#fff" based on perceived luminance of the given colour */
+function getContrastColor(color) {
+  let r, g, b;
+  if (color.startsWith("#")) {
+    let hex = color.slice(1);
+    if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
+    r = parseInt(hex.slice(0,2), 16);
+    g = parseInt(hex.slice(2,4), 16);
+    b = parseInt(hex.slice(4,6), 16);
+  } else {
+    const m = color.match(/(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+    if (m) { r = +m[1]; g = +m[2]; b = +m[3]; }
+    else return "#fff"; // fallback
+  }
+  const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
+  return luminance > 186 ? "#000" : "#fff";
+}
+
 /** Format a duration in minutes:
  *  ≤ 60  → "45'"  (just minutes + apostrophe)
  *  > 60  → "1:25" (H:MM, no leading zero on hours)
@@ -672,9 +708,19 @@ class GanttChart {
       || sector.color
       || (this._acColorMap && this._acColorMap[sector.aircraft_id])
       || routeColor(sector.origin, sector.destination);
-    el.style.background = (sector.status === "cancelled")
-      ? "rgba(60,60,70,0.8)"
-      : bg;
+    if (sector.status === "cancelled") {
+      el.style.background = "rgba(60,60,70,0.8)";
+    } else {
+      el.style.background = bg;
+    }
+
+    // Auto text color based on background luminance
+    const txtColor = sector.status === "cancelled" ? "#fff" : getContrastColor(bg);
+    el.style.color = txtColor;
+    // Adapt text-shadow: light shadow for dark text, dark shadow for light text
+    el.style.textShadow = txtColor === "#000"
+      ? "0 1px 2px rgba(255,255,255,0.3)"
+      : "0 1px 2px rgba(0,0,0,0.4)";
 
     // Times display (LCT or UTC per selected mode)
     const depDisp = this._displayTime(sector.dep_utc, sector.origin);
