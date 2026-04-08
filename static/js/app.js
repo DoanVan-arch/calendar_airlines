@@ -156,6 +156,41 @@ function downloadExcel(data, filename) {
   XLSX.writeFile(wb, filename);
 }
 
+function downloadReportExcel(data, filename) {
+  if (typeof XLSX === "undefined") { alert("Thư viện XLSX chưa tải xong."); return; }
+  const wb = XLSX.utils.book_new();
+  let rows;
+  if (data.sort_by === "aircraft" && data.aircraft_rows) {
+    rows = data.aircraft_rows.map(r => ({
+      "#":            r.line_order,
+      "Tàu":         r.registration,
+      "Loại":        r.name,
+      "Total BH":    r.total_block_hours + "h",
+      "BH/ngày":     r.avg_daily_block_hours + "h",
+      "Số chặng":    r.sector_count,
+      "Ghế/chặng":   r.seats || 0,
+      "Tổng ghế":    r.total_seats || 0,
+    }));
+  } else if (data.route_rows) {
+    rows = data.route_rows.map(r => ({
+      "Đường bay":   r.route,
+      "Total BH":    r.total_block_hours + "h",
+      "Số chặng":    r.sector_count,
+      "Ngày bay":    r.unique_dates,
+      "Ghế":         r.total_seats || 0,
+    }));
+  }
+  if (!rows || rows.length === 0) { alert("Không có dữ liệu."); return; }
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const colWidths = Object.keys(rows[0] || {}).map(k => {
+    const maxLen = Math.max(k.length, ...rows.map(r => String(r[k] || "").length));
+    return { wch: Math.min(maxLen + 2, 30) };
+  });
+  ws["!cols"] = colWidths;
+  XLSX.utils.book_append_sheet(wb, ws, data.sort_by === "aircraft" ? "Aircraft" : "Routes");
+  XLSX.writeFile(wb, filename);
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 async function init() {
   try {
@@ -2540,6 +2575,14 @@ function renderReport(data) {
         <div class="stat-value">${data.period_days}</div>
         <div class="stat-label">Số ngày</div>
       </div>
+      <div class="stat-item">
+        <div class="stat-value">${data.summary.total_sectors || 0}</div>
+        <div class="stat-label">Tổng chặng</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value">${(data.summary.total_seats || 0).toLocaleString()}</div>
+        <div class="stat-label">Tổng ghế</div>
+      </div>
     </div>`;
 
   let table = "";
@@ -2552,10 +2595,10 @@ function renderReport(data) {
       <td>${r.sector_count}</td><td>${r.seats || 0}</td><td>${r.total_seats || 0}</td></tr>`).join("");
     table = `<table class="tt-table"><thead>${hdr}</thead><tbody>${rows}</tbody></table>`;
   } else if (data.route_rows) {
-    const hdr = `<tr><th>Đường bay</th><th>Total BH</th><th>Số chặng</th><th>Ngày bay</th></tr>`;
+    const hdr = `<tr><th>Đường bay</th><th>Total BH</th><th>Số chặng</th><th>Ngày bay</th><th>Ghế</th></tr>`;
     const rows = data.route_rows.map(r => `<tr>
       <td><strong>${r.route}</strong></td><td>${r.total_block_hours}h</td>
-      <td>${r.sector_count}</td><td>${r.unique_dates}</td></tr>`).join("");
+      <td>${r.sector_count}</td><td>${r.unique_dates}</td><td>${r.total_seats || 0}</td></tr>`).join("");
     table = `<table class="tt-table"><thead>${hdr}</thead><tbody>${rows}</tbody></table>`;
   }
 
@@ -3486,6 +3529,10 @@ function bindUI() {
   doc("btnRunReport").addEventListener("click", runReport);
   doc("btnDownloadReport").addEventListener("click", () => {
     if (state.lastReportData) downloadJSON(state.lastReportData, "report.json");
+    else alert("Hãy xem trước rồi tải.");
+  });
+  doc("btnDownloadReportExcel").addEventListener("click", () => {
+    if (state.lastReportData) downloadReportExcel(state.lastReportData, "report.xlsx");
     else alert("Hãy xem trước rồi tải.");
   });
 

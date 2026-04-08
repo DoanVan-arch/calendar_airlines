@@ -36,6 +36,18 @@ def apply_tz(hhmm: str, offset: float) -> str:
     return minutes_to_hhmm(mins)
 
 
+def lct_flight_date(sector_flight_date: str, dep_utc: str, tz_offset: float) -> str:
+    """Compute the local-time (LCT) date of departure.
+    If dep_utc + tz_offset rolls past midnight, the LCT date is the next day."""
+    dep_min = time_to_minutes(dep_utc) + int(tz_offset * 60)
+    dt = datetime.strptime(sector_flight_date, "%Y-%m-%d")
+    if dep_min >= 1440:
+        dt += timedelta(days=1)
+    elif dep_min < 0:
+        dt -= timedelta(days=1)
+    return dt.strftime("%Y-%m-%d")
+
+
 def fmt_display(sector: FlightSector, timezone: str, airports: dict) -> dict:
     dep_ap = airports.get(sector.origin, None)
     arr_ap = airports.get(sector.destination, None)
@@ -107,11 +119,18 @@ def compress_dates(date_strings: List[str]) -> str:
 # ── Timetable export ───────────────────────────────────────────────────────────
 @router.post("/timetable")
 def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db)):
+    # When LCT mode, expand query window by 1 day before (a UTC sector from the
+    # previous day may have an LCT departure that falls into the requested range).
+    q_start = params.period_start
+    q_end = params.period_end
+    if params.timezone == "LCT":
+        q_start = (datetime.strptime(params.period_start, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+
     sectors = (
         db.query(FlightSector)
         .filter(
-            FlightSector.flight_date >= params.period_start,
-            FlightSector.flight_date <= params.period_end,
+            FlightSector.flight_date >= q_start,
+            FlightSector.flight_date <= q_end,
             FlightSector.status == "active",
         )
         .order_by(FlightSector.flight_date, FlightSector.aircraft_id, FlightSector.dep_utc)
@@ -124,7 +143,28 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
     # Build registration map for seats lookup
     reg_map = {reg.id: reg for reg in db.query(Registration).all()}
 
+    # When LCT, post-filter so only sectors whose LCT departure date is in range
+    if params.timezone == "LCT":
+        filtered = []
+        for s in sectors:
+            dep_ap = airports.get(s.origin, None)
+            tz_off = dep_ap.timezone_offset if dep_ap else 7.0
+            lct_date = lct_flight_date(s.flight_date, s.dep_utc, tz_off)
+            if params.period_start <= lct_date <= params.period_end:
+                filtered.append(s)
+        sectors = filtered
+
     rows = [fmt_display(s, params.timezone, airports) for s in sectors]
+    # Override flight_date and day_of_week with LCT date when in LCT mode
+    if params.timezone == "LCT":
+        for i, s in enumerate(sectors):
+            dep_ap = airports.get(s.origin, None)
+            tz_off = dep_ap.timezone_offset if dep_ap else 7.0
+            ld = lct_flight_date(s.flight_date, s.dep_utc, tz_off)
+            rows[i]["flight_date"] = ld
+            dt = datetime.strptime(ld, "%Y-%m-%d")
+            rows[i]["day_of_week"] = str(dt.isoweekday())
+
     for r in rows:
         ac = aircraft_map.get(r["aircraft_id"])
         r["aircraft_reg"] = ac.registration if ac else "?"
@@ -218,11 +258,17 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
 # ── Report ─────────────────────────────────────────────────────────────────────
 @router.post("/report")
 def export_report(params: ReportParams, db: Session = Depends(get_db)):
+    # When LCT mode, expand query window by 1 day before
+    q_start = params.period_start
+    q_end = params.period_end
+    if params.timezone == "LCT":
+        q_start = (datetime.strptime(params.period_start, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+
     sectors = (
         db.query(FlightSector)
         .filter(
-            FlightSector.flight_date >= params.period_start,
-            FlightSector.flight_date <= params.period_end,
+            FlightSector.flight_date >= q_start,
+            FlightSector.flight_date <= q_end,
             FlightSector.status == "active",
         )
         .all()
@@ -233,9 +279,20 @@ def export_report(params: ReportParams, db: Session = Depends(get_db)):
     aircraft_map = {ac.id: ac for ac in aircraft_list}
     reg_map = {reg.id: reg for reg in db.query(Registration).all()}
 
+    # When LCT, post-filter by LCT departure date
+    if params.timezone == "LCT":
+        filtered = []
+        for s in sectors:
+            dep_ap = airports.get(s.origin, None)
+            tz_off = dep_ap.timezone_offset if dep_ap else 7.0
+            lct_date = lct_flight_date(s.flight_date, s.dep_utc, tz_off)
+            if params.period_start <= lct_date <= params.period_end:
+                filtered.append(s)
+        sectors = filtered
+
     # Compute block hours per aircraft
     per_aircraft: dict = defaultdict(lambda: {"block_minutes": 0, "sector_count": 0})
-    per_route: dict = defaultdict(lambda: {"block_minutes": 0, "sector_count": 0, "dates": set()})
+    per_route: dict = defaultdict(lambda: {"block_minutes": 0, "sector_count": 0, "dates": set(), "total_seats": 0})
 
     for s in sectors:
         bt = block_minutes(s.dep_utc, s.arr_utc)
@@ -244,7 +301,17 @@ def export_report(params: ReportParams, db: Session = Depends(get_db)):
         route_key = f"{s.origin}-{s.destination}"
         per_route[route_key]["block_minutes"] += bt
         per_route[route_key]["sector_count"] += 1
-        per_route[route_key]["dates"].add(s.flight_date)
+        # Seats for this sector
+        ac = aircraft_map.get(s.aircraft_id)
+        reg = reg_map.get(ac.registration_id) if ac and ac.registration_id else None
+        per_route[route_key]["total_seats"] += (reg.seats if reg else 0)
+        # Use LCT date for unique-dates count when in LCT mode
+        if params.timezone == "LCT":
+            dep_ap = airports.get(s.origin, None)
+            tz_off = dep_ap.timezone_offset if dep_ap else 7.0
+            per_route[route_key]["dates"].add(lct_flight_date(s.flight_date, s.dep_utc, tz_off))
+        else:
+            per_route[route_key]["dates"].add(s.flight_date)
 
     # Build aircraft rows
     period_days = max(
@@ -274,6 +341,8 @@ def export_report(params: ReportParams, db: Session = Depends(get_db)):
     # Averages
     total_bm = sum(r["total_block_minutes"] for r in aircraft_rows)
     avg_bh = round(total_bm / 60 / max(1, len(aircraft_rows)), 2)
+    grand_total_seats = sum(r["total_seats"] for r in aircraft_rows)
+    grand_total_sectors = sum(r["sector_count"] for r in aircraft_rows)
 
     # Route rows
     route_rows = []
@@ -286,8 +355,14 @@ def export_report(params: ReportParams, db: Session = Depends(get_db)):
             "total_block_hours": round(data["block_minutes"] / 60, 2),
             "sector_count": data["sector_count"],
             "unique_dates": len(data["dates"]),
+            "total_seats": data["total_seats"],
         })
-    route_rows.sort(key=lambda r: (r["origin"], r["destination"]))
+
+    def _pair_sort_key(r):
+        pair = "-".join(sorted([r["origin"], r["destination"]]))
+        outbound = 0 if r["origin"] < r["destination"] else 1
+        return (pair, outbound)
+    route_rows.sort(key=_pair_sort_key)
 
     if params.sort_by == "route":
         return {
@@ -297,7 +372,12 @@ def export_report(params: ReportParams, db: Session = Depends(get_db)):
             "period_days": period_days,
             "sort_by": "route",
             "route_rows": route_rows,
-            "summary": {"total_block_hours": round(total_bm / 60, 2), "avg_per_aircraft_block_hours": avg_bh},
+            "summary": {
+                "total_block_hours": round(total_bm / 60, 2),
+                "avg_per_aircraft_block_hours": avg_bh,
+                "total_seats": grand_total_seats,
+                "total_sectors": grand_total_sectors,
+            },
         }
 
     return {
@@ -307,7 +387,12 @@ def export_report(params: ReportParams, db: Session = Depends(get_db)):
         "period_days": period_days,
         "sort_by": "aircraft",
         "aircraft_rows": aircraft_rows,
-        "summary": {"total_block_hours": round(total_bm / 60, 2), "avg_per_aircraft_block_hours": avg_bh},
+        "summary": {
+            "total_block_hours": round(total_bm / 60, 2),
+            "avg_per_aircraft_block_hours": avg_bh,
+            "total_seats": grand_total_seats,
+            "total_sectors": grand_total_sectors,
+        },
     }
 
 

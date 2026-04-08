@@ -257,6 +257,8 @@ class GanttChart {
       if (parts.length === 3) baseDate = new Date(+parts[0], +parts[1]-1, +parts[2]);
     }
     const fmtDate = (d) => `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}`;
+    const dayNames = ["T7","T1","T2","T3","T4","T5","T6"]; // 0=Sun
+    const fmtDay = (d) => dayNames[d.getDay()];
 
     // Top row: UTC hours
     const utcRow = document.createElement("div");
@@ -272,10 +274,10 @@ class GanttChart {
     labelHeader.className = "label-col-header";
     labelHeader.innerHTML = `
       <div class="ruler-tz-badge ruler-tz-badge-left">
-        <span class="ruler-tz-label">UTC</span>${baseDate ? `<span class="ruler-tz-date">${fmtDate(baseDate)}</span>` : ""}
+        <span class="ruler-tz-label">UTC</span>${baseDate ? `<span class="ruler-tz-date">${fmtDate(baseDate)} (${fmtDay(baseDate)})</span>` : ""}
       </div>
       <div class="ruler-tz-badge ruler-tz-badge-left ruler-tz-badge-lct">
-        <span class="ruler-tz-label">LCT+7</span>${baseDate ? `<span class="ruler-tz-date">${fmtDate(baseDate)}</span>` : ""}
+        <span class="ruler-tz-label">LCT+7</span>${baseDate ? `<span class="ruler-tz-date">${fmtDate(baseDate)} (${fmtDay(baseDate)})</span>` : ""}
       </div>`;
     this.$labelCol.prepend(labelHeader);
 
@@ -296,7 +298,7 @@ class GanttChart {
         } else if (baseDate) {
           const dayOff = Math.floor(h / 24);
           const nextD = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate() + dayOff);
-          utcEl.innerHTML = `<span class="ruler-date-chip ruler-date-chip-day">${fmtDate(nextD)}</span><span>00:00</span>`;
+          utcEl.innerHTML = `<span class="ruler-date-chip ruler-date-chip-day">${fmtDate(nextD)} (${fmtDay(nextD)})</span><span>00:00</span>`;
         } else {
           utcEl.textContent = "00:00";
         }
@@ -316,7 +318,7 @@ class GanttChart {
         } else if (baseDate) {
           const lctDayOffset = Math.floor((h + 7) / 24);
           const nextLctD = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate() + lctDayOffset);
-          lctEl.innerHTML = `<span class="ruler-date-chip">${fmtDate(nextLctD)}</span><span>00:00</span>`;
+          lctEl.innerHTML = `<span class="ruler-date-chip ruler-date-chip-day">${fmtDate(nextLctD)} (${fmtDay(nextLctD)})</span><span>00:00</span>`;
         } else {
           lctEl.textContent = "00:00";
         }
@@ -332,8 +334,13 @@ class GanttChart {
 
   // ── Row builders ────────────────────────────────────────────────────────────
   _addAircraftRow(ac, sectors) {
-    // Compute total block hours for this aircraft today
-    const totalBMin = sectors.reduce((sum, s) => {
+    // Filter sectors to only the current date (24h UTC) for BH and sector count
+    const todaySectors = this._currentDate
+      ? sectors.filter(s => s.flight_date === this._currentDate)
+      : sectors;
+
+    // Compute total block hours for this aircraft today (currentDate only)
+    const totalBMin = todaySectors.reduce((sum, s) => {
       let d = timeToMin(s.dep_utc), a = timeToMin(s.arr_utc);
       if (a <= d) a += 1440;
       return sum + (a - d);
@@ -348,8 +355,8 @@ class GanttChart {
       ? `<span class="color-swatch" style="background:${acColor};"></span>`
       : "";
 
-    // Sector count
-    const sectorCount = sectors.length;
+    // Sector count (currentDate only)
+    const sectorCount = todaySectors.length;
 
     // Label
     const lbl = document.createElement("div");

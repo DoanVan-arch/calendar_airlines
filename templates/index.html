@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PikA - Pickleball Airways</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=30" />
+  <link rel="stylesheet" href="/static/css/style.css?v=32" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
 </head>
 <body>
@@ -17,10 +17,10 @@
   </div>
 
   <div class="header-nav">
-    <button class="icon-btn" id="btnPrevPeriod" title="Kỳ trước"><i class="fas fa-chevron-left"></i></button>
-    <input type="date" id="currentDate" style="font-weight: bold; font-size: 14px;" />
-    <button class="icon-btn" id="btnNextPeriod" title="Kỳ sau"><i class="fas fa-chevron-right"></i></button>
-    <span class="date-label" id="dateLabel" style="font-weight: bold; font-size: 14px;"></span>
+    <button class="icon-btn nav-date-btn" id="btnPrevPeriod" title="Kỳ trước"><i class="fas fa-chevron-left"></i></button>
+    <input type="date" id="currentDate" />
+    <button class="icon-btn nav-date-btn" id="btnNextPeriod" title="Kỳ sau"><i class="fas fa-chevron-right"></i></button>
+    <span class="date-label" id="dateLabel"></span>
     <div class="days-shown-ctrl" id="daysShownCtrl" title="Số ngày hiển thị trên Gantt">
       <label for="daysShownSelect"><i class="fas fa-calendar-week"></i></label>
       <select id="daysShownSelect">
@@ -541,6 +541,7 @@
       </div>
       <button class="btn btn-primary" id="btnRunReport"><i class="fas fa-search"></i> Xem</button>
       <button class="btn btn-secondary" id="btnDownloadReport"><i class="fas fa-download"></i> Tải JSON</button>
+      <button class="btn btn-secondary" id="btnDownloadReportExcel"><i class="fas fa-file-excel"></i> Tải Excel</button>
       <div class="export-result" id="reportResult"></div>
     </div>
   </div>
@@ -904,7 +905,7 @@
   <div class="footer-inner">
     <div class="footer-brand">
       <i class="fas fa-shield-alt"></i>
-      <span>Thuộc sở hữu <strong>Nguyễn Việt Hoàng</strong></span>
+      <span>Thuộc sở hữu <strong>NVH</strong></span>
     </div>
     <div class="footer-links">
       <a href="mailto:mikehvnguyen@gmail.com"><i class="fas fa-envelope"></i> mikehvnguyen@gmail.com</a>
@@ -1076,9 +1077,9 @@
 </div>
 
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-<script src="/static/js/api.js?v=30"></script>
-<script src="/static/js/history.js?v=30"></script>
-<script src="/static/js/gantt.js?v=30"></script>
-<script src="/static/js/app.js?v=30"></script>
+<script src="/static/js/api.js?v=32"></script>
+<script src="/static/js/history.js?v=32"></script>
+<script src="/static/js/gantt.js?v=32"></script>
+<script src="/static/js/app.js?v=32"></script>
 </body>
 </html>
