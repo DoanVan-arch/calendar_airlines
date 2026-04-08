@@ -257,7 +257,7 @@ class GanttChart {
       if (parts.length === 3) baseDate = new Date(+parts[0], +parts[1]-1, +parts[2]);
     }
     const fmtDate = (d) => `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}`;
-    const dayNames = ["T7","T1","T2","T3","T4","T5","T6"]; // 0=Sun
+    const dayNames = ["D7","D1","D2","D3","D4","D5","D6"]; // 0=Sun
     const fmtDay = (d) => dayNames[d.getDay()];
 
     // Top row: UTC hours

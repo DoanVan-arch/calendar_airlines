@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Body
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from typing import List
@@ -7,7 +7,9 @@ from collections import defaultdict
 import json
 
 from ..database import get_db
-from ..models import FlightSector, Aircraft, Airport, BlockTimeRule, TATRule, Registration
+from ..models import (FlightSector, Aircraft, Airport, BlockTimeRule, TATRule,
+                      Registration, Season, MaintenanceBlock, CalendarNote,
+                      RouteColor, AppSetting)
 from ..schemas import TimetableExportParams, ReportParams, ImportPayload
 
 router = APIRouter()
@@ -198,11 +200,13 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
             r["total_seats"] = r["seats"] * r["flight_count"]
             merged_rows.append(r)
 
-        # Default sort: by aircraft (line_order), then by dep time (like Gantt line order)
+        # Default sort: aircraft (line_order) → flight_date → displayed dep time → route
         merged_rows.sort(key=lambda r: (
             (aircraft_map[r["aircraft_id"]].line_order if r["aircraft_id"] in aircraft_map else 0),
             r["aircraft_reg"],
-            r["dep_utc"],
+            r.get("date_range", r.get("flight_date", "")),
+            r["dep_display"],
+            r["route"],
         ))
         return {"mode": "daily", "timezone": params.timezone, "rows": merged_rows}
 
@@ -401,98 +405,260 @@ def export_report(params: ReportParams, db: Session = Depends(get_db)):
 def export_schedule(db: Session = Depends(get_db)):
     airports = [{"code": a.code, "name": a.name, "timezone_offset": a.timezone_offset}
                 for a in db.query(Airport).all()]
-    aircraft = [{"id": a.id, "registration": a.registration, "name": a.name, "line_order": a.line_order}
+    aircraft = [{"id": a.id, "registration": a.registration, "name": a.name,
+                 "ac_type": a.ac_type, "line_order": a.line_order,
+                 "color": a.color, "registration_id": a.registration_id}
                 for a in db.query(Aircraft).order_by(Aircraft.line_order).all()]
     sectors = [
         {
             "id": s.id, "aircraft_id": s.aircraft_id, "flight_date": s.flight_date,
             "origin": s.origin, "destination": s.destination,
             "dep_utc": s.dep_utc, "arr_utc": s.arr_utc,
-            "flight_number": s.flight_number, "status": s.status, "sequence": s.sequence,
+            "flight_number": s.flight_number, "status": s.status,
+            "sequence": s.sequence, "color": s.color,
         }
         for s in db.query(FlightSector).all()
     ]
-    bt_rules = [{"origin": r.origin, "destination": r.destination, "block_time_minutes": r.block_time_minutes}
+    bt_rules = [{"origin": r.origin, "destination": r.destination,
+                 "block_time_minutes": r.block_time_minutes, "ats": r.ats}
                 for r in db.query(BlockTimeRule).all()]
-    tat_rules = [{"station": r.station, "min_tat_minutes": r.min_tat_minutes}
+    tat_rules = [{"station": r.station, "min_tat_minutes": r.min_tat_minutes,
+                  "is_domestic": r.is_domestic}
                  for r in db.query(TATRule).all()]
+    registrations = [{"id": r.id, "registration": r.registration,
+                      "aircraft_model": r.aircraft_model, "seats": r.seats,
+                      "dw_type": r.dw_type, "mtow": r.mtow}
+                     for r in db.query(Registration).all()]
+    seasons = [{"name": s.name, "season_type": s.season_type, "year": s.year,
+                "start_date": s.start_date, "end_date": s.end_date}
+               for s in db.query(Season).all()]
+    maintenance = [{"aircraft_id": m.aircraft_id, "label": m.label,
+                    "start_date": m.start_date, "end_date": m.end_date,
+                    "start_time": m.start_time, "end_time": m.end_time,
+                    "color": m.color}
+                   for m in db.query(MaintenanceBlock).all()]
+    calendar_notes = [{"note_date": n.note_date, "note_end_date": n.note_end_date,
+                       "start_time": n.start_time, "end_time": n.end_time,
+                       "content": n.content, "color": n.color}
+                      for n in db.query(CalendarNote).all()]
+    route_colors = [{"origin": rc.origin, "destination": rc.destination, "color": rc.color}
+                    for rc in db.query(RouteColor).all()]
+    app_settings = [{"key": s.key, "value": s.value}
+                    for s in db.query(AppSetting).all()]
 
     return {
-        "version": "1.0",
+        "version": "2.0",
         "exported_at": datetime.utcnow().isoformat() + "Z",
         "airports": airports,
+        "registrations": registrations,
         "aircraft": aircraft,
         "sectors": sectors,
         "block_time_rules": bt_rules,
         "tat_rules": tat_rules,
+        "seasons": seasons,
+        "maintenance": maintenance,
+        "calendar_notes": calendar_notes,
+        "route_colors": route_colors,
+        "app_settings": app_settings,
     }
 
 
 # ── Import ─────────────────────────────────────────────────────────────────────
 @router.post("/import")
-def import_schedule(payload: ImportPayload, db: Session = Depends(get_db)):
-    if payload.replace_all:
+def import_schedule(payload: dict = Body(...), db: Session = Depends(get_db)):
+    replace_all = payload.get("replace_all", False)
+
+    if replace_all:
+        # Delete in FK-safe order: sectors/maintenance first, then aircraft, then registrations
         db.query(FlightSector).delete()
+        db.query(MaintenanceBlock).delete()
         db.query(Aircraft).delete()
+        db.query(Registration).delete()
         db.query(BlockTimeRule).delete()
         db.query(TATRule).delete()
+        db.query(Season).delete()
+        db.query(CalendarNote).delete()
+        db.query(RouteColor).delete()
+        db.query(AppSetting).delete()
         db.commit()
 
-    # Airports
-    for ap_data in payload.airports:
-        existing = db.query(Airport).filter(Airport.code == ap_data.code.upper()).first()
+    # Airports (always merge, never delete)
+    for ap_data in payload.get("airports", []):
+        code = ap_data["code"].upper()
+        existing = db.query(Airport).filter(Airport.code == code).first()
         if not existing:
-            db.add(Airport(code=ap_data.code.upper(), name=ap_data.name, timezone_offset=ap_data.timezone_offset))
+            db.add(Airport(code=code, name=ap_data.get("name", ""),
+                           timezone_offset=ap_data.get("timezone_offset", 7.0)))
+        else:
+            existing.name = ap_data.get("name") or existing.name
+            existing.timezone_offset = ap_data.get("timezone_offset") if ap_data.get("timezone_offset") is not None else existing.timezone_offset
+    db.commit()
+
+    # Registrations (must come before aircraft for registration_id mapping)
+    old_to_new_reg: dict = {}  # old_id → new_id
+    for reg_data in payload.get("registrations", []):
+        old_id = reg_data.get("id")
+        existing = db.query(Registration).filter(
+            Registration.registration == reg_data["registration"]).first()
+        if not existing:
+            new_reg = Registration(
+                registration=reg_data["registration"],
+                aircraft_model=reg_data.get("aircraft_model", ""),
+                seats=reg_data.get("seats", 0),
+                dw_type=reg_data.get("dw_type"),
+                mtow=reg_data.get("mtow"),
+            )
+            db.add(new_reg)
+            db.flush()
+            if old_id is not None:
+                old_to_new_reg[old_id] = new_reg.id
+        else:
+            existing.aircraft_model = reg_data.get("aircraft_model") or existing.aircraft_model
+            existing.seats = reg_data.get("seats") if reg_data.get("seats") is not None else existing.seats
+            if reg_data.get("dw_type") is not None:
+                existing.dw_type = reg_data["dw_type"]
+            if reg_data.get("mtow") is not None:
+                existing.mtow = reg_data["mtow"]
+            if old_id is not None:
+                old_to_new_reg[old_id] = existing.id
     db.commit()
 
     # Aircraft (build id mapping from old→new)
-    old_to_new_ac: dict = {}
-    for ac_data in payload.aircraft:
-        existing = db.query(Aircraft).filter(Aircraft.registration == ac_data.registration).first()
+    old_to_new_ac: dict = {}  # old_id → new_id
+    for ac_data in payload.get("aircraft", []):
+        old_id = ac_data.get("id")
+        # Map registration_id through old→new mapping
+        old_reg_id = ac_data.get("registration_id")
+        new_reg_id = old_to_new_reg.get(old_reg_id, old_reg_id) if old_reg_id else None
+
+        existing = db.query(Aircraft).filter(
+            Aircraft.registration == ac_data["registration"]).first()
         if not existing:
-            new_ac = Aircraft(registration=ac_data.registration, name=ac_data.name, line_order=ac_data.line_order)
+            new_ac = Aircraft(
+                registration=ac_data["registration"],
+                name=ac_data.get("name"),
+                ac_type=ac_data.get("ac_type"),
+                line_order=ac_data.get("line_order", 0),
+                color=ac_data.get("color"),
+                registration_id=new_reg_id,
+            )
             db.add(new_ac)
             db.flush()
-            old_to_new_ac[ac_data.registration] = new_ac.id
+            if old_id is not None:
+                old_to_new_ac[old_id] = new_ac.id
         else:
-            old_to_new_ac[ac_data.registration] = existing.id
+            # Only overwrite fields that are explicitly provided and non-None
+            if ac_data.get("name") is not None:
+                existing.name = ac_data["name"]
+            if ac_data.get("ac_type") is not None:
+                existing.ac_type = ac_data["ac_type"]
+            if ac_data.get("line_order") is not None:
+                existing.line_order = ac_data["line_order"]
+            if ac_data.get("color") is not None:
+                existing.color = ac_data["color"]
+            if new_reg_id is not None:
+                existing.registration_id = new_reg_id
+            if old_id is not None:
+                old_to_new_ac[old_id] = existing.id
     db.commit()
 
-    # Sectors
-    for s_data in payload.sectors:
-        ac_id = s_data.aircraft_id  # caller should pass correct ids after import
+    # Sectors (map aircraft_id through old→new)
+    for s_data in payload.get("sectors", []):
+        old_ac_id = s_data.get("aircraft_id")
+        ac_id = old_to_new_ac.get(old_ac_id, old_ac_id)
         db.add(FlightSector(
             aircraft_id=ac_id,
-            flight_date=s_data.flight_date,
-            origin=s_data.origin.upper(),
-            destination=s_data.destination.upper(),
-            dep_utc=s_data.dep_utc,
-            arr_utc=s_data.arr_utc,
-            flight_number=s_data.flight_number,
-            status=s_data.status,
-            sequence=s_data.sequence,
+            flight_date=s_data["flight_date"],
+            origin=s_data["origin"].upper(),
+            destination=s_data["destination"].upper(),
+            dep_utc=s_data["dep_utc"],
+            arr_utc=s_data["arr_utc"],
+            flight_number=s_data.get("flight_number"),
+            status=s_data.get("status", "active"),
+            sequence=s_data.get("sequence", 0),
+            color=s_data.get("color"),
         ))
     db.commit()
 
     # Block-time rules
-    for r_data in payload.block_time_rules:
+    for r_data in payload.get("block_time_rules", []):
+        orig, dest = r_data["origin"].upper(), r_data["destination"].upper()
         existing = db.query(BlockTimeRule).filter(
-            BlockTimeRule.origin == r_data.origin.upper(),
-            BlockTimeRule.destination == r_data.destination.upper(),
-        ).first()
+            BlockTimeRule.origin == orig, BlockTimeRule.destination == dest).first()
         if existing:
-            existing.block_time_minutes = r_data.block_time_minutes
+            existing.block_time_minutes = r_data["block_time_minutes"]
+            if r_data.get("ats") is not None:
+                existing.ats = r_data["ats"]
         else:
-            db.add(BlockTimeRule(origin=r_data.origin.upper(), destination=r_data.destination.upper(),
-                                 block_time_minutes=r_data.block_time_minutes))
+            db.add(BlockTimeRule(origin=orig, destination=dest,
+                                 block_time_minutes=r_data["block_time_minutes"],
+                                 ats=r_data.get("ats")))
 
     # TAT rules
-    for r_data in payload.tat_rules:
-        existing = db.query(TATRule).filter(TATRule.station == r_data.station.upper()).first()
+    for r_data in payload.get("tat_rules", []):
+        station = r_data["station"].upper()
+        existing = db.query(TATRule).filter(TATRule.station == station).first()
         if existing:
-            existing.min_tat_minutes = r_data.min_tat_minutes
+            if r_data.get("min_tat_minutes") is not None:
+                existing.min_tat_minutes = r_data["min_tat_minutes"]
+            if r_data.get("is_domestic") is not None:
+                existing.is_domestic = r_data["is_domestic"]
         else:
-            db.add(TATRule(station=r_data.station.upper(), min_tat_minutes=r_data.min_tat_minutes))
+            db.add(TATRule(station=station,
+                           min_tat_minutes=r_data.get("min_tat_minutes", 40),
+                           is_domestic=r_data.get("is_domestic")))
+
+    # Seasons
+    for s_data in payload.get("seasons", []):
+        existing = db.query(Season).filter(
+            Season.name == s_data["name"], Season.year == s_data["year"]).first()
+        if not existing:
+            db.add(Season(name=s_data["name"], season_type=s_data["season_type"],
+                          year=s_data["year"], start_date=s_data["start_date"],
+                          end_date=s_data["end_date"]))
+
+    # Maintenance blocks (map aircraft_id)
+    for m_data in payload.get("maintenance", []):
+        old_ac_id = m_data.get("aircraft_id")
+        ac_id = old_to_new_ac.get(old_ac_id, old_ac_id)
+        db.add(MaintenanceBlock(
+            aircraft_id=ac_id, label=m_data.get("label", "Maintenance"),
+            start_date=m_data["start_date"], end_date=m_data["end_date"],
+            start_time=m_data.get("start_time"), end_time=m_data.get("end_time"),
+            color=m_data.get("color", "#f59e0b"),
+        ))
+
+    # Calendar notes
+    for n_data in payload.get("calendar_notes", []):
+        db.add(CalendarNote(
+            note_date=n_data["note_date"],
+            note_end_date=n_data.get("note_end_date"),
+            start_time=n_data.get("start_time"),
+            end_time=n_data.get("end_time"),
+            content=n_data["content"],
+            color=n_data.get("color", "#3b82f6"),
+        ))
+
+    # Route colors
+    for rc_data in payload.get("route_colors", []):
+        orig, dest = rc_data["origin"].upper(), rc_data["destination"].upper()
+        existing = db.query(RouteColor).filter(
+            RouteColor.origin == orig, RouteColor.destination == dest).first()
+        if not existing:
+            db.add(RouteColor(origin=orig, destination=dest, color=rc_data["color"]))
+        else:
+            existing.color = rc_data["color"]
+
+    # App settings
+    for s_data in payload.get("app_settings", []):
+        existing = db.query(AppSetting).filter(AppSetting.key == s_data["key"]).first()
+        if existing:
+            existing.value = s_data.get("value")
+        else:
+            db.add(AppSetting(key=s_data["key"], value=s_data.get("value")))
 
     db.commit()
-    return {"ok": True, "message": "Import successful"}
+
+    cnt_sectors = len(payload.get("sectors", []))
+    cnt_aircraft = len(payload.get("aircraft", []))
+    return {"ok": True, "message": f"Import successful: {cnt_aircraft} aircraft, {cnt_sectors} sectors"}

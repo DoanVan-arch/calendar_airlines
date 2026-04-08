@@ -2467,7 +2467,7 @@ function renderTimetableTable(data) {
           return (a.dep_utc || "").localeCompare(b.dep_utc || "");
         });
       } else {
-        // default: aircraft (by line_order) → dep time (same order as Gantt line)
+        // default: aircraft (line_order) → flight_date → displayed dep time → route
         sorted.sort((a, b) => {
           const loA = a.line_order ?? 0;
           const loB = b.line_order ?? 0;
@@ -2475,7 +2475,15 @@ function renderTimetableTable(data) {
           const acA = a.aircraft_reg || (a.aircraft ? a.aircraft.join(",") : "");
           const acB = b.aircraft_reg || (b.aircraft ? b.aircraft.join(",") : "");
           if (acA !== acB) return acA.localeCompare(acB);
-          return (a.dep_utc || "").localeCompare(b.dep_utc || "");
+          const dateA = a.date_range || a.flight_date || "";
+          const dateB = b.date_range || b.flight_date || "";
+          if (dateA !== dateB) return dateA.localeCompare(dateB);
+          const depA = a.dep_display || "";
+          const depB = b.dep_display || "";
+          if (depA !== depB) return depA.localeCompare(depB);
+          const rtA = a.route || (a.origin + "-" + a.destination);
+          const rtB = b.route || (b.origin + "-" + b.destination);
+          return rtA.localeCompare(rtB);
         });
       }
       _renderTTRows(el, { ...d, rows: sorted });
@@ -2630,8 +2638,8 @@ async function handleImportFile(e) {
     await API.importSchedule(data);
     history.clear();
     await loadReferenceData();
-    await refreshGantt();
-    alert("Import thành công!");
+    await refreshView();
+    alert(`Import thành công!\n${data.sectors?.length || 0} chặng bay, ${data.aircraft?.length || 0} tàu bay`);
   } catch (e) {
     alert("Lỗi import: " + e.message);
   }
@@ -2725,24 +2733,62 @@ function bindContextMenu() {
 
   doc("cmCancel").addEventListener("click", async () => {
     if (!_ctxSector) return;
-    const s = _ctxSector;
-    await API.cancelSector(s.id);
+    const selectedIds = gantt.getSelectedSectorIds();
+    const toCancel = (selectedIds.length > 1 && selectedIds.includes(_ctxSector.id))
+      ? state.sectors.filter(s => selectedIds.includes(s.id))
+      : [_ctxSector];
+    const ids = toCancel.map(s => s.id);
+    const label = toCancel.length > 1
+      ? `Huỷ ${toCancel.length} chặng đã chọn`
+      : `Cancel sector ${toCancel[0].origin}→${toCancel[0].destination}`;
+    if (toCancel.length > 1) {
+      await API.bulkCancelSectors(ids);
+    } else {
+      await API.cancelSector(ids[0]);
+    }
     history.push({
-      label: `Cancel sector ${s.origin}→${s.destination}`,
-      undo: async () => { await API.restoreSector(s.id); await refreshGantt(); },
-      redo: async () => { await API.cancelSector(s.id);  await refreshGantt(); },
+      label,
+      undo: async () => {
+        if (ids.length > 1) await API.bulkRestoreSectors(ids);
+        else await API.restoreSector(ids[0]);
+        await refreshGantt();
+      },
+      redo: async () => {
+        if (ids.length > 1) await API.bulkCancelSectors(ids);
+        else await API.cancelSector(ids[0]);
+        await refreshGantt();
+      },
     });
     await refreshGantt();
   });
 
   doc("cmRestore").addEventListener("click", async () => {
     if (!_ctxSector) return;
-    const s = _ctxSector;
-    await API.restoreSector(s.id);
+    const selectedIds = gantt.getSelectedSectorIds();
+    const toRestore = (selectedIds.length > 1 && selectedIds.includes(_ctxSector.id))
+      ? state.sectors.filter(s => selectedIds.includes(s.id))
+      : [_ctxSector];
+    const ids = toRestore.map(s => s.id);
+    const label = toRestore.length > 1
+      ? `Khôi phục ${toRestore.length} chặng đã chọn`
+      : `Restore sector ${toRestore[0].origin}→${toRestore[0].destination}`;
+    if (toRestore.length > 1) {
+      await API.bulkRestoreSectors(ids);
+    } else {
+      await API.restoreSector(ids[0]);
+    }
     history.push({
-      label: `Restore sector ${s.origin}→${s.destination}`,
-      undo: async () => { await API.cancelSector(s.id);  await refreshGantt(); },
-      redo: async () => { await API.restoreSector(s.id); await refreshGantt(); },
+      label,
+      undo: async () => {
+        if (ids.length > 1) await API.bulkCancelSectors(ids);
+        else await API.cancelSector(ids[0]);
+        await refreshGantt();
+      },
+      redo: async () => {
+        if (ids.length > 1) await API.bulkRestoreSectors(ids);
+        else await API.restoreSector(ids[0]);
+        await refreshGantt();
+      },
     });
     await refreshGantt();
   });

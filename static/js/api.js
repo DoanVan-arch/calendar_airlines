@@ -32,6 +32,8 @@ const API = (() => {
     deleteSector: (id)         => req("DELETE",`/api/sectors/${id}`),
     cancelSector: (id)         => req("POST",  `/api/sectors/${id}/cancel`, {}),
     restoreSector: (id)        => req("POST",  `/api/sectors/${id}/restore`, {}),
+    bulkCancelSectors: (ids)   => req("POST",  "/api/sectors/bulk-cancel", { sector_ids: ids }),
+    bulkRestoreSectors: (ids)  => req("POST",  "/api/sectors/bulk-restore", { sector_ids: ids }),
     getWarnings: (date)        => req("GET",   `/api/sectors/warnings?date=${date}`),
     swapAircraft: (d)          => req("POST",  "/api/sectors/swap-aircraft", d),
 

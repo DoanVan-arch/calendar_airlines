@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 
 from ..database import get_db
 from ..models import FlightSector, BlockTimeRule, TATRule, Aircraft, Airport, AuditLog
-from ..schemas import FlightSectorCreate, FlightSectorUpdate, FlightSectorOut, SwapAircraftPayload
+from ..schemas import FlightSectorCreate, FlightSectorUpdate, FlightSectorOut, SwapAircraftPayload, BulkCancelPayload
 from .auth import get_session
 
 router = APIRouter()
@@ -180,6 +180,42 @@ def restore_sector(request: Request, sector_id: int, db: Session = Depends(get_d
     db.refresh(sector)
     _audit(db, request, "RESTORE", sector)
     return sector
+
+
+@router.post("/bulk-cancel")
+def bulk_cancel_sectors(request: Request, payload: BulkCancelPayload, db: Session = Depends(get_db)):
+    """Cancel multiple sectors at once."""
+    results = []
+    for sid in payload.sector_ids:
+        sector = db.query(FlightSector).filter(FlightSector.id == sid).first()
+        if not sector:
+            continue
+        sector.status = "cancelled"
+        results.append(sid)
+    db.commit()
+    for sid in results:
+        sector = db.query(FlightSector).filter(FlightSector.id == sid).first()
+        if sector:
+            _audit(db, request, "CANCEL", sector)
+    return {"ok": True, "cancelled": results}
+
+
+@router.post("/bulk-restore")
+def bulk_restore_sectors(request: Request, payload: BulkCancelPayload, db: Session = Depends(get_db)):
+    """Restore multiple cancelled sectors at once."""
+    results = []
+    for sid in payload.sector_ids:
+        sector = db.query(FlightSector).filter(FlightSector.id == sid).first()
+        if not sector:
+            continue
+        sector.status = "active"
+        results.append(sid)
+    db.commit()
+    for sid in results:
+        sector = db.query(FlightSector).filter(FlightSector.id == sid).first()
+        if sector:
+            _audit(db, request, "RESTORE", sector)
+    return {"ok": True, "restored": results}
 
 
 # ── Swap aircraft lines ────────────────────────────────────────────────────────

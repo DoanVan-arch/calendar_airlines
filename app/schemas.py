@@ -11,6 +11,10 @@ class SwapAircraftPayload(BaseModel):
     date: Optional[str] = None   # YYYY-MM-DD; if None → swap ALL dates
 
 
+class BulkCancelPayload(BaseModel):
+    sector_ids: List[int]
+
+
 # ── Airport ────────────────────────────────────────────────────────────────────
 class AirportBase(BaseModel):
     code: str

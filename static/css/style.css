@@ -78,6 +78,13 @@ body {
   cursor: pointer;
   outline: none;
   transition: all 0.2s;
+  color-scheme: dark;
+}
+#currentDate::-webkit-calendar-picker-indicator {
+  filter: invert(0.6) sepia(1) saturate(5) hue-rotate(185deg);
+  cursor: pointer;
+  font-size: 18px;
+  opacity: 1;
 }
 #currentDate:hover, #currentDate:focus {
   border-color: #79c0ff;
