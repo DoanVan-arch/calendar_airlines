@@ -1567,6 +1567,11 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
   color: #fff;
   border-color: var(--accent);
 }
+.tt-route-chip.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
 
 /* ── Month view: add note button ──────────────────────────────────────────── */
 .month-add-note {
@@ -2016,4 +2021,22 @@ body {
   padding: 4px 8px;
   font-size: 13px;
 }
+
+/* ── Mini Calendar Date Picker ──────────────────────────────────────────────── */
+.cal-picker { border:1px solid var(--border); border-radius:6px; padding:10px; }
+.cal-picker-hdr { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+.cal-picker-hdr button { background:none; border:none; color:var(--text); cursor:pointer; font-size:16px; padding:2px 8px; border-radius:4px; }
+.cal-picker-hdr button:hover { background:var(--surface-hover); }
+.cal-picker-hdr .cal-month-label { font-weight:600; font-size:13px; color:var(--text); }
+.cal-picker-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:2px; text-align:center; }
+.cal-picker-grid .cal-dow-hdr { font-size:10px; color:var(--text-muted); font-weight:600; padding:2px 0 4px; }
+.cal-picker-grid .cal-day { font-size:12px; padding:4px 2px; border-radius:4px; cursor:pointer; color:var(--text); background:transparent; border:1px solid transparent; transition: background .15s, border-color .15s; }
+.cal-picker-grid .cal-day:hover { background:var(--surface-hover); }
+.cal-picker-grid .cal-day.selected { background:var(--accent); color:#fff; border-color:var(--accent); font-weight:600; }
+.cal-picker-grid .cal-day.other-month { color:var(--text-muted); opacity:0.4; }
+.cal-picker-grid .cal-day.today { border-color:var(--accent); }
+.cal-picker-info { margin-top:6px; font-size:12px; color:var(--text-muted); }
+.cal-selected-tags { display:flex; flex-wrap:wrap; gap:4px; margin-top:6px; }
+.cal-selected-tag { font-size:11px; background:var(--accent); color:#fff; padding:2px 8px; border-radius:10px; cursor:pointer; }
+.cal-selected-tag:hover { opacity:0.8; }
 

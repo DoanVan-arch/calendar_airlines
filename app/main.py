@@ -304,6 +304,18 @@ def _migrate_db():
         except Exception:
             pass
 
+        # Add curfew columns to airports table
+        try:
+            conn.execute(text("ALTER TABLE airports ADD COLUMN curfew_open VARCHAR(5)"))
+            conn.commit()
+        except Exception:
+            pass
+        try:
+            conn.execute(text("ALTER TABLE airports ADD COLUMN curfew_close VARCHAR(5)"))
+            conn.commit()
+        except Exception:
+            pass
+
 
 app = FastAPI(title="Airline Schedule Manager", lifespan=lifespan)
 

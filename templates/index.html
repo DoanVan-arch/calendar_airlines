@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PikA - Pickleball Airways</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=34" />
+  <link rel="stylesheet" href="/static/css/style.css?v=37" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
 </head>
 <body>
@@ -270,27 +270,40 @@
         </div>
       </div>
       <!-- Repeat (period) -->
-      <div class="form-row">
-        <div class="form-group">
-          <label>Từ ngày *</label>
-          <input type="date" id="chainDateFrom" />
-        </div>
-        <div class="form-group">
-          <label>Đến ngày *</label>
-          <input type="date" id="chainDateTo" />
+      <div class="form-group" style="margin-top:4px;">
+        <label style="font-size:12px;color:var(--text-muted);margin-bottom:4px;display:block;">Chế độ ngày</label>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <label class="checkbox-label"><input type="radio" name="chainDateMode" value="range" checked /> Khoảng ngày + Thứ</label>
+          <label class="checkbox-label"><input type="radio" name="chainDateMode" value="calendar" /> Chọn ngày cụ thể</label>
         </div>
       </div>
-      <div class="form-group">
-        <label>Các ngày trong tuần</label>
-        <div class="dow-checkboxes">
-          <label class="checkbox-label"><input type="checkbox" class="chain-dow-cb" value="1" checked /> T2</label>
-          <label class="checkbox-label"><input type="checkbox" class="chain-dow-cb" value="2" checked /> T3</label>
-          <label class="checkbox-label"><input type="checkbox" class="chain-dow-cb" value="3" checked /> T4</label>
-          <label class="checkbox-label"><input type="checkbox" class="chain-dow-cb" value="4" checked /> T5</label>
-          <label class="checkbox-label"><input type="checkbox" class="chain-dow-cb" value="5" checked /> T6</label>
-          <label class="checkbox-label"><input type="checkbox" class="chain-dow-cb" value="6" checked /> T7</label>
-          <label class="checkbox-label"><input type="checkbox" class="chain-dow-cb" value="0" checked /> CN</label>
+      <div id="chainRangeSection">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Từ ngày *</label>
+            <input type="date" id="chainDateFrom" />
+          </div>
+          <div class="form-group">
+            <label>Đến ngày *</label>
+            <input type="date" id="chainDateTo" />
+          </div>
         </div>
+        <div class="form-group">
+          <label>Các ngày trong tuần</label>
+          <div class="dow-checkboxes">
+            <label class="checkbox-label"><input type="checkbox" class="chain-dow-cb" value="1" checked /> T2</label>
+            <label class="checkbox-label"><input type="checkbox" class="chain-dow-cb" value="2" checked /> T3</label>
+            <label class="checkbox-label"><input type="checkbox" class="chain-dow-cb" value="3" checked /> T4</label>
+            <label class="checkbox-label"><input type="checkbox" class="chain-dow-cb" value="4" checked /> T5</label>
+            <label class="checkbox-label"><input type="checkbox" class="chain-dow-cb" value="5" checked /> T6</label>
+            <label class="checkbox-label"><input type="checkbox" class="chain-dow-cb" value="6" checked /> T7</label>
+            <label class="checkbox-label"><input type="checkbox" class="chain-dow-cb" value="0" checked /> CN</label>
+          </div>
+        </div>
+      </div>
+      <!-- Calendar picker section for chain (hidden by default) -->
+      <div id="chainCalendarSection" class="hidden" style="margin-top:6px;">
+        <div id="chainCalendarPicker" class="cal-picker"></div>
       </div>
       <div class="form-group">
         <label>Chuỗi chặng bay (mỗi dòng: ĐIỂM ĐI - ĐIỂM ĐẾN | SỐ HIỆU) *</label>
@@ -421,7 +434,7 @@
           <button class="btn btn-success btn-sm admin-only" id="btnAddAirport"><i class="fas fa-plus"></i> Thêm</button>
         </div>
         <table class="data-table" id="airportTable">
-          <thead><tr><th>Mã (IATA)</th><th>Tên sân bay</th><th>Múi giờ (UTC+)</th><th>Loại</th><th class="admin-only"></th></tr></thead>
+          <thead><tr><th>Mã (IATA)</th><th>Tên sân bay</th><th>Múi giờ (UTC+)</th><th>Curfew</th><th>Loại</th><th class="admin-only"></th></tr></thead>
           <tbody id="airportTableBody"></tbody>
         </table>
       </div>
@@ -498,10 +511,25 @@
             <option value="UTC">UTC</option>
           </select>
         </div>
+        <div class="form-group">
+          <label>Hiển thị</label>
+          <select id="expDisplay">
+            <option value="flat">Danh sách phẳng</option>
+            <option value="grouped">Gộp theo đường bay</option>
+          </select>
+        </div>
       </div>
       <button class="btn btn-primary" id="btnRunExport"><i class="fas fa-search"></i> Xem</button>
       <button class="btn btn-secondary" id="btnDownloadTT"><i class="fas fa-download"></i> Tải JSON</button>
       <button class="btn btn-secondary" id="btnDownloadExcel"><i class="fas fa-file-excel"></i> Tải Excel</button>
+
+      <!-- Route filter (populated after data loads) -->
+      <div id="ttRouteFilterWrap" class="hidden" style="margin-top:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+        <span style="font-size:11px;color:var(--text-muted);">Lọc đường bay:</span>
+        <div id="ttRouteFilterChips" style="display:flex;gap:4px;flex-wrap:wrap;"></div>
+        <button class="btn btn-secondary btn-sm" id="btnTTFilterClear" style="font-size:10px;">Bỏ lọc</button>
+      </div>
+
       <div class="export-result" id="exportResult"></div>
     </div>
   </div>
@@ -816,6 +844,17 @@
           <option value="international">Quốc tế</option>
         </select>
       </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Curfew mở cửa</label>
+          <input type="time" id="apCurfewOpen" placeholder="06:00" />
+        </div>
+        <div class="form-group">
+          <label>Curfew đóng cửa</label>
+          <input type="time" id="apCurfewClose" placeholder="23:00" />
+        </div>
+      </div>
+      <p style="font-size:10px;color:var(--text-muted);margin-top:2px;">Để trống = 24/24 (không giới hạn)</p>
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" data-close="airportFormModal">Huỷ</button>
@@ -941,12 +980,14 @@
           <input type="date" id="pasteDate" />
         </div>
       </div>
-      <!-- Multi-day repeat toggle -->
+      <!-- Date mode selector -->
       <div class="form-group" style="margin-top:4px;">
-        <label class="checkbox-label">
-          <input type="checkbox" id="pasteMultiMode" />
-          Paste nhiều ngày (lặp lại theo khoảng ngày)
-        </label>
+        <label style="font-size:12px;color:var(--text-muted);margin-bottom:4px;display:block;">Chế độ ngày</label>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <label class="checkbox-label"><input type="radio" name="pasteDateMode" value="single" checked /> Một ngày</label>
+          <label class="checkbox-label"><input type="radio" name="pasteDateMode" value="range" /> Khoảng ngày + Thứ</label>
+          <label class="checkbox-label"><input type="radio" name="pasteDateMode" value="calendar" /> Chọn ngày cụ thể</label>
+        </div>
       </div>
       <!-- Multi-day section (hidden by default) -->
       <div id="pasteMultiSection" class="hidden" style="border:1px solid var(--border);border-radius:6px;padding:10px;margin-top:6px;">
@@ -973,6 +1014,10 @@
           </div>
         </div>
         <p class="hint-text" id="pasteMultiPreviewCount" style="margin-top:4px;"></p>
+      </div>
+      <!-- Calendar picker section (hidden by default) -->
+      <div id="pasteCalendarSection" class="hidden" style="margin-top:6px;">
+        <div id="pasteCalendarPicker" class="cal-picker"></div>
       </div>
     </div>
     <div class="modal-footer">
@@ -1077,9 +1122,9 @@
 </div>
 
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-<script src="/static/js/api.js?v=34"></script>
-<script src="/static/js/history.js?v=34"></script>
-<script src="/static/js/gantt.js?v=34"></script>
-<script src="/static/js/app.js?v=34"></script>
+<script src="/static/js/api.js?v=37"></script>
+<script src="/static/js/history.js?v=37"></script>
+<script src="/static/js/gantt.js?v=37"></script>
+<script src="/static/js/app.js?v=37"></script>
 </body>
 </html>

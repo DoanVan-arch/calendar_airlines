@@ -31,7 +31,9 @@ def create_airport(payload: AirportCreate, db: Session = Depends(get_db)):
     existing = db.query(Airport).filter(Airport.code == payload.code.upper()).first()
     if existing:
         raise HTTPException(400, f"Airport '{payload.code}' already exists")
-    ap = Airport(code=payload.code.upper(), name=payload.name, timezone_offset=payload.timezone_offset)
+    ap = Airport(code=payload.code.upper(), name=payload.name,
+                 timezone_offset=payload.timezone_offset,
+                 curfew_open=payload.curfew_open, curfew_close=payload.curfew_close)
     db.add(ap)
     db.commit()
     db.refresh(ap)
@@ -45,6 +47,8 @@ def update_airport(code: str, payload: AirportCreate, db: Session = Depends(get_
         raise HTTPException(404, "Airport not found")
     ap.name = payload.name
     ap.timezone_offset = payload.timezone_offset
+    ap.curfew_open = payload.curfew_open
+    ap.curfew_close = payload.curfew_close
     db.commit()
     db.refresh(ap)
     return ap

@@ -20,6 +20,8 @@ class AirportBase(BaseModel):
     code: str
     name: str
     timezone_offset: float = 7.0
+    curfew_open: Optional[str] = None    # HH:MM local time, e.g. "06:00"
+    curfew_close: Optional[str] = None   # HH:MM local time, e.g. "23:00"
 
 
 class AirportCreate(AirportBase):

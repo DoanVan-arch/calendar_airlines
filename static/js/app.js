@@ -165,8 +165,8 @@ function downloadReportExcel(data, filename) {
       "#":            r.line_order,
       "Tàu":         r.registration,
       "Loại":        r.name,
-      "Total BH":    r.total_block_hours + "h",
-      "BH/ngày":     r.avg_daily_block_hours + "h",
+      "Total BH":    r.total_block_hours,
+      "BH/ngày":     r.avg_daily_block_hours,
       "Số chặng":    r.sector_count,
       "Ghế/chặng":   r.seats || 0,
       "Tổng ghế":    r.total_seats || 0,
@@ -174,7 +174,7 @@ function downloadReportExcel(data, filename) {
   } else if (data.route_rows) {
     rows = data.route_rows.map(r => ({
       "Đường bay":   r.route,
-      "Total BH":    r.total_block_hours + "h",
+      "Total BH":    r.total_block_hours,
       "Số chặng":    r.sector_count,
       "Ngày bay":    r.unique_dates,
       "Ghế":         r.total_seats || 0,
@@ -1387,6 +1387,7 @@ async function saveSector() {
 }
 
 // ─── Chain flight entry ───────────────────────────────────────────────────────
+let _chainCalPicker = null;   // calendar picker instance for chain modal
 function openChainModal() {
   const acSel = doc("chainAircraftId");
   acSel.innerHTML = state.aircraft.map(ac =>
@@ -1399,6 +1400,31 @@ function openChainModal() {
   document.querySelectorAll(".chain-dow-cb").forEach(cb => { cb.checked = true; });
   doc("chainPreviewBox").classList.add("hidden");
   doc("chainPreviewError").classList.add("hidden");
+
+  // Reset date mode to "range"
+  document.querySelectorAll('input[name="chainDateMode"]').forEach(r => {
+    r.checked = (r.value === "range");
+  });
+  doc("chainRangeSection").classList.remove("hidden");
+  doc("chainCalendarSection").classList.add("hidden");
+
+  // Destroy previous calendar picker if any
+  if (_chainCalPicker) { _chainCalPicker.destroy(); _chainCalPicker = null; }
+
+  // Wire up date mode radios
+  document.querySelectorAll('input[name="chainDateMode"]').forEach(radio => {
+    const nr = radio.cloneNode(true);
+    radio.parentNode.replaceChild(nr, radio);
+    nr.addEventListener("change", () => {
+      const mode = document.querySelector('input[name="chainDateMode"]:checked').value;
+      doc("chainRangeSection").classList.toggle("hidden", mode !== "range");
+      doc("chainCalendarSection").classList.toggle("hidden", mode !== "calendar");
+      if (mode === "calendar" && !_chainCalPicker) {
+        _chainCalPicker = createCalendarPicker(doc("chainCalendarPicker"), state.currentDate, () => {});
+      }
+    });
+  });
+
   doc("chainModalOverlay").classList.remove("hidden");
 }
 
@@ -1545,24 +1571,42 @@ async function saveChain() {
     return;
   }
 
-  const acId    = parseInt(doc("chainAircraftId").value, 10);
-  const dateFrom = doc("chainDateFrom").value;
-  const dateTo   = doc("chainDateTo").value;
-  if (!acId || !dateFrom || !dateTo) {
-    alert("Vui lòng điền đầy đủ thông tin.");
-    return;
-  }
-  if (dateTo < dateFrom) {
-    alert("Ngày kết thúc phải sau ngày bắt đầu.");
-    return;
-  }
+  const acId = parseInt(doc("chainAircraftId").value, 10);
+  if (!acId) { alert("Vui lòng chọn tàu bay."); return; }
 
-  const selectedDOWs = new Set(
-    [...document.querySelectorAll(".chain-dow-cb:checked")].map(cb => parseInt(cb.value, 10))
-  );
-  if (selectedDOWs.size === 0) {
-    alert("Chọn ít nhất một ngày trong tuần.");
-    return;
+  const chainDateMode = (document.querySelector('input[name="chainDateMode"]:checked') || {}).value || "range";
+
+  // Build list of target dates
+  let targetDates = [];
+  if (chainDateMode === "calendar") {
+    targetDates = _chainCalPicker ? _chainCalPicker.getSelectedDates() : [];
+    if (targetDates.length === 0) {
+      alert("Chưa chọn ngày nào trên lịch."); return;
+    }
+  } else {
+    const dateFrom = doc("chainDateFrom").value;
+    const dateTo   = doc("chainDateTo").value;
+    if (!dateFrom || !dateTo) {
+      alert("Vui lòng điền đầy đủ thông tin."); return;
+    }
+    if (dateTo < dateFrom) {
+      alert("Ngày kết thúc phải sau ngày bắt đầu."); return;
+    }
+    const selectedDOWs = new Set(
+      [...document.querySelectorAll(".chain-dow-cb:checked")].map(cb => parseInt(cb.value, 10))
+    );
+    if (selectedDOWs.size === 0) {
+      alert("Chọn ít nhất một ngày trong tuần."); return;
+    }
+    let cur = new Date(dateFrom + "T00:00:00");
+    const end = new Date(dateTo + "T00:00:00");
+    while (cur <= end) {
+      if (selectedDOWs.has(cur.getDay())) targetDates.push(dateToStr(cur));
+      cur.setDate(cur.getDate() + 1);
+    }
+    if (targetDates.length === 0) {
+      alert("Không có ngày nào phù hợp với điều kiện đã chọn."); return;
+    }
   }
 
   // Get aircraft color for new sectors
@@ -1570,37 +1614,29 @@ async function saveChain() {
   const sectorColor = (ac && ac.color) ? ac.color : null;
 
   const createdIds = [];
-  let cur = new Date(dateFrom + "T00:00:00");
-  const end = new Date(dateTo + "T00:00:00");
-
-  while (cur <= end) {
-    const dow = cur.getDay();
-    if (selectedDOWs.has(dow)) {
-      const baseDate = dateToStr(cur);
-      for (let i = 0; i < rows.length; i++) {
-        const r = rows[i];
-        // Compute which day this leg falls on relative to chain start
-        const dayOffset = Math.floor(r._depAbsMin / 1440);
-        const sectorDate = _addDaysStr(baseDate, dayOffset);
-        const payload = {
-          aircraft_id: acId,
-          flight_date: sectorDate,
-          origin: r.origin,
-          destination: r.destination,
-          dep_utc: r.depUTC,
-          arr_utc: r.arrUTC,
-          flight_number: r.flightNumber || null,
-          color: sectorColor,
-        };
-        try {
-          const created = await API.createSector(payload);
-          createdIds.push(created.id);
-        } catch (e) {
-          console.warn(`Skip chain sector ${r.origin}-${r.destination} on ${sectorDate}:`, e.message);
-        }
+  for (const baseDate of targetDates) {
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      // Compute which day this leg falls on relative to chain start
+      const dayOffset = Math.floor(r._depAbsMin / 1440);
+      const sectorDate = _addDaysStr(baseDate, dayOffset);
+      const payload = {
+        aircraft_id: acId,
+        flight_date: sectorDate,
+        origin: r.origin,
+        destination: r.destination,
+        dep_utc: r.depUTC,
+        arr_utc: r.arrUTC,
+        flight_number: r.flightNumber || null,
+        color: sectorColor,
+      };
+      try {
+        const created = await API.createSector(payload);
+        createdIds.push(created.id);
+      } catch (e) {
+        console.warn(`Skip chain sector ${r.origin}-${r.destination} on ${sectorDate}:`, e.message);
       }
     }
-    cur.setDate(cur.getDate() + 1);
   }
 
   if (createdIds.length === 0) {
@@ -1609,7 +1645,7 @@ async function saveChain() {
   }
 
   history.push({
-    label: `Add chain ${rows.length} legs x ${Math.ceil(createdIds.length / rows.length)} days`,
+    label: `Add chain ${rows.length} legs x ${targetDates.length} days`,
     undo: async () => {
       for (const sid of createdIds) { try { await API.deleteSector(sid); } catch {} }
       await refreshGantt();
@@ -1617,8 +1653,7 @@ async function saveChain() {
     redo: async () => { /* complex redo - skip */ await refreshGantt(); },
   });
 
-  const daysCount = Math.ceil(createdIds.length / rows.length);
-  showToast(`Đã tạo ${createdIds.length} chặng bay (${rows.length} chặng × ${daysCount} ngày).`, "success");
+  showToast(`Đã tạo ${createdIds.length} chặng bay (${rows.length} chặng × ${targetDates.length} ngày).`, "success");
   closeModal("chainModalOverlay");
   await refreshGantt();
 }
@@ -2325,27 +2360,35 @@ async function renderAirportTable() {
     const isDom = ap.timezone_offset === 7;
     const typeLabel = isDom ? "Nội địa" : "Quốc tế";
     const typeClass = isDom ? "tag-domestic" : "tag-intl";
+    const curfewLabel = (ap.curfew_open && ap.curfew_close)
+      ? `${ap.curfew_open} – ${ap.curfew_close}`
+      : "24/24";
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td><strong>${ap.code}</strong></td>
       <td>${ap.name}</td>
       <td>+${ap.timezone_offset}</td>
+      <td>${curfewLabel}</td>
       <td><span class="${typeClass}">${typeLabel}</span></td>
       <td class="action-cell admin-only" style="display:${isAdmin ? "" : "none"}">
-        <button class="btn btn-secondary btn-sm" onclick="editAirport('${ap.code}','${ap.name}',${ap.timezone_offset})">Sửa</button>
+        <button class="btn btn-secondary btn-sm" onclick="editAirport('${ap.code}')">Sửa</button>
         <button class="btn btn-danger btn-sm" onclick="deleteAirport('${ap.code}')">Xoá</button>
       </td>`;
     tbody.appendChild(tr);
   }
 }
 
-function editAirport(code, name, tz) {
+function editAirport(code) {
+  const ap = state.airports[code];
+  if (!ap) return;
   doc("apCode").value = code;
   doc("apCodeInput").value = code;
   doc("apCodeInput").disabled = true;
-  doc("apName").value = name;
-  doc("apTZ").value = tz;
-  doc("apType").value = tz === 7 ? "domestic" : "international";
+  doc("apName").value = ap.name;
+  doc("apTZ").value = ap.timezone_offset;
+  doc("apType").value = ap.timezone_offset === 7 ? "domestic" : "international";
+  doc("apCurfewOpen").value = ap.curfew_open || "";
+  doc("apCurfewClose").value = ap.curfew_close || "";
   doc("airportFormTitle").textContent = "Chỉnh sửa sân bay";
   doc("airportFormModal").classList.remove("hidden");
 }
@@ -2362,14 +2405,19 @@ async function saveAirport() {
   const code = doc("apCodeInput").value.toUpperCase().trim();
   const name = doc("apName").value.trim();
   const tz   = parseFloat(doc("apTZ").value);
+  const curfewOpen  = doc("apCurfewOpen").value || null;
+  const curfewClose = doc("apCurfewClose").value || null;
   if (!code || !name || isNaN(tz)) { alert("Điền đầy đủ thông tin"); return; }
   const existing = doc("apCode").value;
+  const payload = { code, name, timezone_offset: tz, curfew_open: curfewOpen, curfew_close: curfewClose };
   try {
-    if (existing) await API.updateAirport(existing, { code, name, timezone_offset: tz });
-    else          await API.createAirport({ code, name, timezone_offset: tz });
+    if (existing) await API.updateAirport(existing, payload);
+    else          await API.createAirport(payload);
     doc("airportFormModal").classList.add("hidden");
     doc("apCodeInput").disabled = false;
     doc("apCode").value = "";
+    doc("apCurfewOpen").value = "";
+    doc("apCurfewClose").value = "";
     state.airports = Object.fromEntries((await API.getAirports()).map(ap => [ap.code, ap]));
     // Sync TAT rules: update is_domestic for ALL TAT rules matching this airport code
     const isDom = tz === 7;
@@ -2409,6 +2457,7 @@ async function runExport() {
   try {
     const data = await API.exportTimetable(params);
     state.lastExportData = data;
+    data.displayMode = doc("expDisplay").value;   // "flat" or "grouped"
     renderTimetableTable(data);
   } catch (e) {
     alert("Lỗi: " + e.message);
@@ -2429,65 +2478,54 @@ function renderTimetableTable(data) {
   `;
   el.appendChild(sortBar);
 
-  // Store data for re-sorting
+  // Store original data for re-sorting / re-filtering
   state._ttDisplayData = data;
+  state._ttAllRows = data.rows;          // unfiltered master copy
+  state._ttActiveRoutes = new Set();     // empty = show all
+
+  // ── Build route filter chips ───────────────────────────────────────
+  const routeSet = new Set();
+  for (const r of data.rows) {
+    const rt = r.route || (r.origin + "-" + r.destination);
+    routeSet.add(rt);
+  }
+  const routes = [...routeSet].sort();
+  const filterWrap = doc("ttRouteFilterWrap");
+  const chipsEl    = doc("ttRouteFilterChips");
+  chipsEl.innerHTML = "";
+  if (routes.length > 0) {
+    filterWrap.classList.remove("hidden");
+    filterWrap.style.display = "flex";
+    for (const rt of routes) {
+      const chip = document.createElement("button");
+      chip.className = "btn btn-secondary btn-sm tt-route-chip";
+      chip.dataset.route = rt;
+      chip.textContent = rt;
+      chip.style.cssText = "font-size:10px;padding:2px 8px;border-radius:12px;";
+      chip.addEventListener("click", () => {
+        chip.classList.toggle("active");
+        if (chip.classList.contains("active")) {
+          state._ttActiveRoutes.add(rt);
+        } else {
+          state._ttActiveRoutes.delete(rt);
+        }
+        _applyTTFilter(el, sortBar);
+      });
+      chipsEl.appendChild(chip);
+    }
+    doc("btnTTFilterClear").onclick = () => {
+      state._ttActiveRoutes.clear();
+      chipsEl.querySelectorAll(".tt-route-chip").forEach(c => c.classList.remove("active"));
+      _applyTTFilter(el, sortBar);
+    };
+  } else {
+    filterWrap.classList.add("hidden");
+  }
 
   // Bind sort buttons
   sortBar.querySelectorAll(".tt-sort-btn").forEach(btn => {
     btn.addEventListener("click", () => {
-      const sortMode = btn.dataset.sort;
-      const d = state._ttDisplayData;
-      if (!d || !d.rows || d.rows.length === 0) return;
-      const sorted = [...d.rows];
-      if (sortMode === "route") {
-        // Pair routes together, then sub-group by aircraft within each pair
-        // e.g. BKK-HAN (tàu A), HAN-BKK (tàu A), BKK-HAN (tàu B), HAN-BKK (tàu B), ...
-        const _pairKey = (r) => {
-          const o = r.origin || r.route.split("-")[0];
-          const d = r.destination || r.route.split("-")[1];
-          return [o, d].sort().join("-");
-        };
-        const _isOutbound = (r) => {
-          const o = r.origin || r.route.split("-")[0];
-          const d = r.destination || r.route.split("-")[1];
-          return o < d ? 0 : 1; // outbound (alphabetically first origin) = 0, return = 1
-        };
-        sorted.sort((a, b) => {
-          const pkA = _pairKey(a);
-          const pkB = _pairKey(b);
-          if (pkA !== pkB) return pkA.localeCompare(pkB);
-          // Sub-group by aircraft within the same route pair
-          const acA = a.aircraft_reg || "";
-          const acB = b.aircraft_reg || "";
-          if (acA !== acB) return acA.localeCompare(acB);
-          // Outbound before return within same aircraft
-          const obA = _isOutbound(a);
-          const obB = _isOutbound(b);
-          if (obA !== obB) return obA - obB;
-          return (a.dep_utc || "").localeCompare(b.dep_utc || "");
-        });
-      } else {
-        // default: aircraft (line_order) → flight_date → displayed dep time → route
-        sorted.sort((a, b) => {
-          const loA = a.line_order ?? 0;
-          const loB = b.line_order ?? 0;
-          if (loA !== loB) return loA - loB;
-          const acA = a.aircraft_reg || (a.aircraft ? a.aircraft.join(",") : "");
-          const acB = b.aircraft_reg || (b.aircraft ? b.aircraft.join(",") : "");
-          if (acA !== acB) return acA.localeCompare(acB);
-          const dateA = a.date_range || a.flight_date || "";
-          const dateB = b.date_range || b.flight_date || "";
-          if (dateA !== dateB) return dateA.localeCompare(dateB);
-          const depA = a.dep_display || "";
-          const depB = b.dep_display || "";
-          if (depA !== depB) return depA.localeCompare(depB);
-          const rtA = a.route || (a.origin + "-" + a.destination);
-          const rtB = b.route || (b.origin + "-" + b.destination);
-          return rtA.localeCompare(rtB);
-        });
-      }
-      _renderTTRows(el, { ...d, rows: sorted });
-      // Update active button
+      _applyTTSort(btn.dataset.sort, el, sortBar);
       sortBar.querySelectorAll(".tt-sort-btn").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
     });
@@ -2498,41 +2536,149 @@ function renderTimetableTable(data) {
   _renderTTRows(el, data);
 }
 
+/** Apply current route filter, then re-sort and render */
+function _applyTTFilter(el, sortBar) {
+  const d = state._ttDisplayData;
+  if (!d) return;
+  let rows = state._ttAllRows;
+  if (state._ttActiveRoutes && state._ttActiveRoutes.size > 0) {
+    rows = rows.filter(r => {
+      const rt = r.route || (r.origin + "-" + r.destination);
+      return state._ttActiveRoutes.has(rt);
+    });
+  }
+  const activeBtn = sortBar.querySelector(".tt-sort-btn.active");
+  const mode = activeBtn ? activeBtn.dataset.sort : "default";
+  const sorted = _sortTTRows([...rows], mode);
+  _renderTTRows(el, { ...d, rows: sorted });
+}
+
+/** Sort + render triggered by sort button click */
+function _applyTTSort(sortMode, el, sortBar) {
+  const d = state._ttDisplayData;
+  if (!d) return;
+  let rows = state._ttAllRows;
+  if (state._ttActiveRoutes && state._ttActiveRoutes.size > 0) {
+    rows = rows.filter(r => {
+      const rt = r.route || (r.origin + "-" + r.destination);
+      return state._ttActiveRoutes.has(rt);
+    });
+  }
+  const sorted = _sortTTRows([...rows], sortMode);
+  _renderTTRows(el, { ...d, rows: sorted });
+}
+
+/** Pure sort function for timetable rows */
+function _sortTTRows(sorted, sortMode) {
+  if (sortMode === "route") {
+    const _pairKey = (r) => {
+      const o = r.origin || r.route.split("-")[0];
+      const d = r.destination || r.route.split("-")[1];
+      return [o, d].sort().join("-");
+    };
+    const _isOutbound = (r) => {
+      const o = r.origin || r.route.split("-")[0];
+      const d = r.destination || r.route.split("-")[1];
+      return o < d ? 0 : 1;
+    };
+    const _sortDate = (r) => r.date_range || r.flight_date || "";
+    sorted.sort((a, b) => {
+      const pkA = _pairKey(a); const pkB = _pairKey(b);
+      if (pkA !== pkB) return pkA.localeCompare(pkB);
+      const obA = _isOutbound(a); const obB = _isOutbound(b);
+      if (obA !== obB) return obA - obB;
+      const dA = _sortDate(a); const dB = _sortDate(b);
+      if (dA !== dB) return dA.localeCompare(dB);
+      const depA = a.dep_display || a.dep_utc || "";
+      const depB = b.dep_display || b.dep_utc || "";
+      return depA.localeCompare(depB);
+    });
+  } else {
+    sorted.sort((a, b) => {
+      const loA = a.line_order ?? 0; const loB = b.line_order ?? 0;
+      if (loA !== loB) return loA - loB;
+      const acA = a.aircraft_reg || (a.aircraft ? a.aircraft.join(",") : "");
+      const acB = b.aircraft_reg || (b.aircraft ? b.aircraft.join(",") : "");
+      if (acA !== acB) return acA.localeCompare(acB);
+      const dateA = a.date_range || a.flight_date || "";
+      const dateB = b.date_range || b.flight_date || "";
+      if (dateA !== dateB) return dateA.localeCompare(dateB);
+      const depA = a.dep_display || "";
+      const depB = b.dep_display || "";
+      if (depA !== depB) return depA.localeCompare(depB);
+      const rtA = a.route || (a.origin + "-" + a.destination);
+      const rtB = b.route || (b.origin + "-" + b.destination);
+      return rtA.localeCompare(rtB);
+    });
+  }
+  return sorted;
+}
+
 function _renderTTRows(container, data) {
   // Remove existing table if any
   const oldTable = container.querySelector(".tt-table");
   if (oldTable) oldTable.remove();
 
-  if (data.mode === "daily") {
+  const displayMode = data.displayMode || "flat";
+
+  if (displayMode === "grouped") {
+    // ── Grouped display: route shown once, sub-rows for each flight ──
+    // First, sort by route (pair-grouped) for proper grouping
+    const sorted = _sortTTRows([...data.rows], "route");
     const hdr = `<tr>
-      <th>Tàu</th><th>Chặng bay</th><th>Điểm đi</th><th>Điểm đến</th>
+      <th>Tàu</th><th>Chuyến</th><th>Chặng bay</th>
       <th>Cất (${data.timezone})</th><th>Hạ (${data.timezone})</th>
-      <th>Block</th><th>DAY</th><th>Chuyến</th><th>Ngày bay</th><th>Số CB</th><th>Ghế</th></tr>`;
+      <th>Block</th><th>Ngày bay</th><th>Day</th><th>Số CB</th><th>Ghế</th></tr>`;
+    let rowsHtml = "";
+    let lastRoute = "";
+    for (const r of sorted) {
+      const route = r.route || (r.origin + "-" + r.destination);
+      const showRoute = route !== lastRoute;
+      lastRoute = route;
+      const acDisplay = r.aircraft_reg || (r.aircraft ? r.aircraft.join(", ") : "");
+      rowsHtml += `<tr>
+        <td>${acDisplay}</td>
+        <td>${r.flight_number || ""}</td>
+        <td style="font-weight:${showRoute ? "bold" : "normal"}">${showRoute ? route : ""}</td>
+        <td>${r.dep_display}</td><td>${r.arr_display}</td>
+        <td>${minToHHMM(r.block_time_minutes)}</td>
+        <td>${r.date_range || r.flight_date || ""}</td>
+        <td>${r.day_of_week || ""}</td>
+        <td>${r.flight_count || 1}</td>
+        <td>${r.total_seats || r.seats || 0}</td></tr>`;
+    }
+    container.insertAdjacentHTML("beforeend",
+      `<table class="tt-table"><thead>${hdr}</thead><tbody>${rowsHtml}</tbody></table>`);
+  } else if (data.mode === "daily") {
+    const hdr = `<tr>
+      <th>Tàu</th><th>Chuyến</th><th>Chặng bay</th>
+      <th>Cất (${data.timezone})</th><th>Hạ (${data.timezone})</th>
+      <th>Block</th><th>Ngày bay</th><th>Day</th><th>Số CB</th><th>Ghế</th></tr>`;
     const rows = data.rows.map(r => `<tr>
       <td>${r.aircraft_reg}</td>
-      <td>${r.route || r.origin + "-" + r.destination}</td>
-      <td>${r.origin}</td><td>${r.destination}</td>
-      <td>${r.dep_display}</td><td>${r.arr_display}</td>
-      <td>${minToHHMM(r.block_time_minutes)}</td><td>${r.day_of_week}</td>
       <td>${r.flight_number || ""}</td>
-      <td>${r.date_range || r.flight_date || ""}</td>
+      <td>${r.route || r.origin + "-" + r.destination}</td>
+      <td>${r.dep_display}</td><td>${r.arr_display}</td>
+      <td>${minToHHMM(r.block_time_minutes)}</td>
+      <td>${r.date_range || r.flight_date || ""}</td><td>${r.day_of_week}</td>
       <td>${r.flight_count || 1}</td>
       <td>${r.total_seats || 0}</td></tr>`).join("");
     container.insertAdjacentHTML("beforeend",
       `<table class="tt-table"><thead>${hdr}</thead><tbody>${rows}</tbody></table>`);
   } else {
     const hdr = `<tr>
-      <th>Chặng bay</th><th>Điểm đi</th><th>Điểm đến</th>
+      <th>Tàu</th><th>Chuyến</th><th>Chặng bay</th>
       <th>Cất (${data.timezone})</th><th>Hạ (${data.timezone})</th>
-      <th>Block</th><th>DAY</th><th>Ngày bay</th><th>Số CB</th><th>Ghế</th><th>Tàu</th></tr>`;
+      <th>Block</th><th>Ngày bay</th><th>Day</th><th>Số CB</th><th>Ghế</th></tr>`;
     const rows = data.rows.map(r => `<tr>
+      <td>${r.aircraft ? r.aircraft.join(", ") : ""}</td>
+      <td>${r.flight_number || ""}</td>
       <td>${r.route || r.origin + "-" + r.destination}</td>
-      <td>${r.origin}</td><td>${r.destination}</td>
       <td>${r.dep_display}</td><td>${r.arr_display}</td>
-      <td>${minToHHMM(r.block_time_minutes)}</td><td>${r.day_of_week}</td>
-      <td>${r.date_range}</td><td>${r.flight_count}</td>
-      <td>${r.total_seats || 0}</td>
-      <td>${r.aircraft.join(", ")}</td></tr>`).join("");
+      <td>${minToHHMM(r.block_time_minutes)}</td>
+      <td>${r.date_range}</td><td>${r.day_of_week}</td>
+      <td>${r.flight_count}</td>
+      <td>${r.total_seats || 0}</td></tr>`).join("");
     container.insertAdjacentHTML("beforeend",
       `<table class="tt-table"><thead>${hdr}</thead><tbody>${rows}</tbody></table>`);
   }
@@ -2597,15 +2743,15 @@ function renderReport(data) {
   if (data.sort_by === "aircraft" && data.aircraft_rows) {
     const hdr = `<tr><th>#</th><th>Tàu</th><th>Loại</th>
       <th>Total BH</th><th>BH/ngày</th><th>Số chặng</th><th>Ghế/chặng</th><th>Tổng ghế</th></tr>`;
-    const rows = data.aircraft_rows.map(r => `<tr>
-      <td>${r.line_order}</td><td><strong>${r.registration}</strong></td><td>${r.name}</td>
-      <td>${r.total_block_hours}h</td><td>${r.avg_daily_block_hours}h</td>
+    const rows = data.aircraft_rows.map((r, i) => `<tr>
+      <td>${i + 1}</td><td><strong>${r.registration}</strong></td><td>${r.name}</td>
+      <td>${r.total_block_hours}h</td><td>${r.avg_daily_block_hours}</td>
       <td>${r.sector_count}</td><td>${r.seats || 0}</td><td>${r.total_seats || 0}</td></tr>`).join("");
     table = `<table class="tt-table"><thead>${hdr}</thead><tbody>${rows}</tbody></table>`;
   } else if (data.route_rows) {
     const hdr = `<tr><th>Đường bay</th><th>Total BH</th><th>Số chặng</th><th>Ngày bay</th><th>Ghế</th></tr>`;
     const rows = data.route_rows.map(r => `<tr>
-      <td><strong>${r.route}</strong></td><td>${r.total_block_hours}h</td>
+      <td><strong>${r.route}</strong></td><td>${r.total_block_hours}</td>
       <td>${r.sector_count}</td><td>${r.unique_dates}</td><td>${r.total_seats || 0}</td></tr>`).join("");
     table = `<table class="tt-table"><thead>${hdr}</thead><tbody>${rows}</tbody></table>`;
   }
@@ -2846,6 +2992,130 @@ function showToast(msg, type = "info") {
   }, 2500);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Mini Calendar Date Picker — reusable widget for selecting specific dates
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Render a mini calendar into `container`.
+ * Returns an object { getSelectedDates, setMonth, destroy }.
+ * @param {HTMLElement} container — where to render
+ * @param {string} initialDate — "YYYY-MM-DD" to start month view on
+ * @param {function} onChange — called with sorted array of "YYYY-MM-DD" strings whenever selection changes
+ */
+function createCalendarPicker(container, initialDate, onChange) {
+  let viewYear, viewMonth;                     // currently displayed month
+  const selected = new Set();                  // set of "YYYY-MM-DD"
+  const today = dateToStr(new Date());
+
+  const init = initialDate || state.currentDate || today;
+  const d0 = new Date(init + "T00:00:00");
+  viewYear = d0.getFullYear();
+  viewMonth = d0.getMonth();
+
+  const MONTH_NAMES = ["Tháng 1","Tháng 2","Tháng 3","Tháng 4","Tháng 5","Tháng 6",
+    "Tháng 7","Tháng 8","Tháng 9","Tháng 10","Tháng 11","Tháng 12"];
+  const DOW_LABELS = ["CN","T2","T3","T4","T5","T6","T7"];
+
+  function render() {
+    // Header
+    let html = `<div class="cal-picker-hdr">
+      <button class="cal-prev" title="Tháng trước"><i class="fas fa-chevron-left"></i></button>
+      <span class="cal-month-label">${MONTH_NAMES[viewMonth]} ${viewYear}</span>
+      <button class="cal-next" title="Tháng sau"><i class="fas fa-chevron-right"></i></button>
+    </div>`;
+
+    // Grid
+    html += `<div class="cal-picker-grid">`;
+    for (const dl of DOW_LABELS) html += `<div class="cal-dow-hdr">${dl}</div>`;
+
+    // First day of month and fill
+    const first = new Date(viewYear, viewMonth, 1);
+    const startDow = first.getDay(); // 0=Sun
+    const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+
+    // Fill previous month
+    const prevMonthDays = new Date(viewYear, viewMonth, 0).getDate();
+    for (let i = startDow - 1; i >= 0; i--) {
+      const day = prevMonthDays - i;
+      const m = viewMonth === 0 ? 11 : viewMonth - 1;
+      const y = viewMonth === 0 ? viewYear - 1 : viewYear;
+      const ds = `${y}-${String(m + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+      const cls = selected.has(ds) ? "cal-day other-month selected" : "cal-day other-month";
+      html += `<div class="${cls}" data-date="${ds}">${day}</div>`;
+    }
+    // Current month days
+    for (let day = 1; day <= daysInMonth; day++) {
+      const ds = `${viewYear}-${String(viewMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+      let cls = "cal-day";
+      if (selected.has(ds)) cls += " selected";
+      if (ds === today) cls += " today";
+      html += `<div class="${cls}" data-date="${ds}">${day}</div>`;
+    }
+    // Fill next month
+    const totalCells = startDow + daysInMonth;
+    const remaining = (7 - totalCells % 7) % 7;
+    for (let i = 1; i <= remaining; i++) {
+      const m = viewMonth === 11 ? 0 : viewMonth + 1;
+      const y = viewMonth === 11 ? viewYear + 1 : viewYear;
+      const ds = `${y}-${String(m + 1).padStart(2, "0")}-${String(i).padStart(2, "0")}`;
+      const cls = selected.has(ds) ? "cal-day other-month selected" : "cal-day other-month";
+      html += `<div class="${cls}" data-date="${ds}">${i}</div>`;
+    }
+    html += `</div>`;
+
+    // Info + selected tags
+    html += `<div class="cal-picker-info">Đã chọn: <strong>${selected.size}</strong> ngày. Click để chọn/bỏ.</div>`;
+    if (selected.size > 0) {
+      const sorted = [...selected].sort();
+      html += `<div class="cal-selected-tags">`;
+      for (const ds of sorted) {
+        const dt = new Date(ds + "T00:00:00");
+        const label = `${dt.getDate()}/${dt.getMonth() + 1}`;
+        html += `<span class="cal-selected-tag" data-date="${ds}" title="Bỏ chọn ${ds}">${label}</span>`;
+      }
+      html += `</div>`;
+    }
+
+    container.innerHTML = html;
+
+    // Event listeners
+    container.querySelector(".cal-prev").addEventListener("click", () => {
+      viewMonth--; if (viewMonth < 0) { viewMonth = 11; viewYear--; }
+      render();
+    });
+    container.querySelector(".cal-next").addEventListener("click", () => {
+      viewMonth++; if (viewMonth > 11) { viewMonth = 0; viewYear++; }
+      render();
+    });
+    container.querySelectorAll(".cal-day").forEach(el => {
+      el.addEventListener("click", () => {
+        const ds = el.getAttribute("data-date");
+        if (selected.has(ds)) selected.delete(ds); else selected.add(ds);
+        render();
+        if (onChange) onChange([...selected].sort());
+      });
+    });
+    container.querySelectorAll(".cal-selected-tag").forEach(el => {
+      el.addEventListener("click", () => {
+        const ds = el.getAttribute("data-date");
+        selected.delete(ds);
+        render();
+        if (onChange) onChange([...selected].sort());
+      });
+    });
+  }
+
+  render();
+
+  return {
+    getSelectedDates: () => [...selected].sort(),
+    setMonth: (y, m) => { viewYear = y; viewMonth = m; render(); },
+    clearSelection: () => { selected.clear(); render(); if (onChange) onChange([]); },
+    destroy: () => { container.innerHTML = ""; },
+  };
+}
+
 /** Ctrl+C: copy selected sectors or last clicked sector */
 function copySelectedSectors() {
   if (state.userRole !== "admin") return;
@@ -2862,7 +3132,7 @@ function copySelectedSectors() {
   if (sectors.length === 0) return;
   state.clipboard = {
     type      : "sectors",
-    sectors   : sectors.map(s => ({ ...s })),
+    sectors   : sectors.map(s => ({ ...s, _dayOffset: 0 })),
     sourceAcId: sectors[0].aircraft_id,
     sourceDate: state.currentDate,
   };
@@ -2887,6 +3157,7 @@ function copyAircraftLine(acId, acName) {
 }
 
 /** Open paste modal (Ctrl+V) */
+let _pasteCalPicker = null;   // calendar picker instance for paste modal
 function openPasteModal() {
   if (state.userRole !== "admin") return;
   if (!state.clipboard) {
@@ -2900,24 +3171,31 @@ function openPasteModal() {
   doc("pasteMultiFrom").value = state.currentDate;
   doc("pasteMultiTo").value   = state.currentDate;
 
-  // Reset multi-mode off
-  doc("pasteMultiMode").checked = false;
+  // Reset date mode to "single"
+  document.querySelectorAll('input[name="pasteDateMode"]').forEach(r => {
+    r.checked = (r.value === "single");
+  });
   doc("pasteSingleDateSection").classList.remove("hidden");
   doc("pasteMultiSection").classList.add("hidden");
+  doc("pasteCalendarSection").classList.add("hidden");
 
-  // Wire up multi-mode toggle (remove old listeners by cloning)
-  const multiToggle = doc("pasteMultiMode");
-  const newToggle = multiToggle.cloneNode(true);
-  multiToggle.parentNode.replaceChild(newToggle, multiToggle);
-  newToggle.addEventListener("change", () => {
-    if (newToggle.checked) {
-      doc("pasteSingleDateSection").classList.add("hidden");
-      doc("pasteMultiSection").classList.remove("hidden");
-    } else {
-      doc("pasteSingleDateSection").classList.remove("hidden");
-      doc("pasteMultiSection").classList.add("hidden");
-    }
-    _updatePasteMultiPreview();
+  // Destroy previous calendar picker if any
+  if (_pasteCalPicker) { _pasteCalPicker.destroy(); _pasteCalPicker = null; }
+
+  // Wire up date mode radios
+  document.querySelectorAll('input[name="pasteDateMode"]').forEach(radio => {
+    const nr = radio.cloneNode(true);
+    radio.parentNode.replaceChild(nr, radio);
+    nr.addEventListener("change", () => {
+      const mode = document.querySelector('input[name="pasteDateMode"]:checked').value;
+      doc("pasteSingleDateSection").classList.toggle("hidden", mode !== "single");
+      doc("pasteMultiSection").classList.toggle("hidden", mode !== "range");
+      doc("pasteCalendarSection").classList.toggle("hidden", mode !== "calendar");
+      if (mode === "calendar" && !_pasteCalPicker) {
+        _pasteCalPicker = createCalendarPicker(doc("pasteCalendarPicker"), state.currentDate, () => {});
+      }
+      _updatePasteMultiPreview();
+    });
   });
 
   // Wire range+DOW changes to update preview count
@@ -3013,14 +3291,19 @@ async function confirmPaste() {
   const { type, sectors } = state.clipboard;
   const targetAcId  = parseInt(doc("pasteAircraftId").value, 10);
   const doReplace   = doc("pasteReplace").checked;
-  const isMulti     = doc("pasteMultiMode").checked;
+  const dateMode    = (document.querySelector('input[name="pasteDateMode"]:checked') || {}).value || "single";
 
   // Determine target date(s)
   let targetDates;
-  if (isMulti) {
+  if (dateMode === "range") {
     targetDates = _pasteMultiDates();
     if (targetDates.length === 0) {
       alert("Không có ngày nào phù hợp với điều kiện đã chọn."); return;
+    }
+  } else if (dateMode === "calendar") {
+    targetDates = _pasteCalPicker ? _pasteCalPicker.getSelectedDates() : [];
+    if (targetDates.length === 0) {
+      alert("Chưa chọn ngày nào trên lịch."); return;
     }
   } else {
     const singleDate = doc("pasteDate").value;
@@ -3555,6 +3838,8 @@ function bindUI() {
     doc("apName").value = "";
     doc("apTZ").value = "7";
     doc("apType").value = "domestic";
+    doc("apCurfewOpen").value = "";
+    doc("apCurfewClose").value = "";
     doc("airportFormTitle").textContent = "Thêm sân bay";
     doc("airportFormModal").classList.remove("hidden");
   });

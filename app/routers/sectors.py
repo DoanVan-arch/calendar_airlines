@@ -301,6 +301,11 @@ def get_warnings(
     default_tat_intl = tat_map.pop("__INTL__", 60)
     # Build airport timezone lookup for domestic/intl classification
     airport_tz = {ap.code: ap.timezone_offset for ap in db.query(Airport).all()}
+    # Build curfew lookup: {code: (open, close)} — only airports with curfew set
+    airport_curfew = {}
+    for ap in db.query(Airport).all():
+        if ap.curfew_open and ap.curfew_close:
+            airport_curfew[ap.code] = (ap.curfew_open, ap.curfew_close)
 
     aircraft_list = db.query(Aircraft).order_by(Aircraft.line_order).all()
 
@@ -336,6 +341,59 @@ def get_warnings(
                             f"{ac.registration} | {s.origin}→{s.destination} "
                             f"({s.dep_utc}-{s.arr_utc}): block time {abs(diff)} min "
                             f"{direction} than planned ({actual_bt} vs {expected} min)"
+                        ),
+                    })
+
+            # 1b. Curfew check — departure at origin
+            if s.origin in airport_curfew:
+                curfew_open, curfew_close = airport_curfew[s.origin]
+                dep_min = time_to_minutes(s.dep_utc)
+                tz_offset = airport_tz.get(s.origin, 0)
+                dep_local = (dep_min + int(tz_offset * 60)) % 1440
+                c_open = time_to_minutes(curfew_open)
+                c_close = time_to_minutes(curfew_close)
+                # Check if departure is outside operating hours
+                if c_open <= c_close:
+                    outside = dep_local < c_open or dep_local >= c_close
+                else:
+                    outside = dep_local >= c_close and dep_local < c_open
+                if outside:
+                    dep_local_str = f"{dep_local // 60:02d}:{dep_local % 60:02d}"
+                    warnings.append({
+                        "type": "CURFEW",
+                        "severity": "warning",
+                        "sector_id": s.id,
+                        "aircraft": ac.registration,
+                        "message": (
+                            f"{ac.registration} | Curfew {s.origin}: cất cánh lúc "
+                            f"{dep_local_str} LCT ngoài giờ mở cửa "
+                            f"{curfew_open}–{curfew_close}"
+                        ),
+                    })
+
+            # 1c. Curfew check — arrival at destination
+            if s.destination in airport_curfew:
+                curfew_open, curfew_close = airport_curfew[s.destination]
+                arr_min = time_to_minutes(s.arr_utc)
+                tz_offset = airport_tz.get(s.destination, 0)
+                arr_local = (arr_min + int(tz_offset * 60)) % 1440
+                c_open = time_to_minutes(curfew_open)
+                c_close = time_to_minutes(curfew_close)
+                if c_open <= c_close:
+                    outside = arr_local < c_open or arr_local >= c_close
+                else:
+                    outside = arr_local >= c_close and arr_local < c_open
+                if outside:
+                    arr_local_str = f"{arr_local // 60:02d}:{arr_local % 60:02d}"
+                    warnings.append({
+                        "type": "CURFEW",
+                        "severity": "warning",
+                        "sector_id": s.id,
+                        "aircraft": ac.registration,
+                        "message": (
+                            f"{ac.registration} | Curfew {s.destination}: hạ cánh lúc "
+                            f"{arr_local_str} LCT ngoài giờ mở cửa "
+                            f"{curfew_open}–{curfew_close}"
                         ),
                     })
 

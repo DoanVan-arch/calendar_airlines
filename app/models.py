@@ -8,6 +8,8 @@ class Airport(Base):
     code = Column(String(10), primary_key=True)
     name = Column(String(200))
     timezone_offset = Column(Float, default=7.0)  # Hours from UTC
+    curfew_open = Column(String(5), nullable=True)   # HH:MM local time, e.g. "06:00"
+    curfew_close = Column(String(5), nullable=True)  # HH:MM local time, e.g. "23:00"
 
 
 class Aircraft(Base):

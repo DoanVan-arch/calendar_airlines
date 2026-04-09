@@ -128,6 +128,9 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
     if params.timezone == "LCT":
         q_start = (datetime.strptime(params.period_start, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
 
+    # Exclude TẠM aircraft (registration_id IS NULL) from timetable
+    tam_ids = {ac.id for ac in db.query(Aircraft).filter(Aircraft.registration_id.is_(None)).all()}
+
     sectors = (
         db.query(FlightSector)
         .filter(
@@ -138,6 +141,7 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
         .order_by(FlightSector.flight_date, FlightSector.aircraft_id, FlightSector.dep_utc)
         .all()
     )
+    sectors = [s for s in sectors if s.aircraft_id not in tam_ids]
 
     airports = {ap.code: ap for ap in db.query(Airport).all()}
     aircraft_map = {ac.id: ac for ac in db.query(Aircraft).all()}
@@ -268,6 +272,9 @@ def export_report(params: ReportParams, db: Session = Depends(get_db)):
     if params.timezone == "LCT":
         q_start = (datetime.strptime(params.period_start, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
 
+    # Exclude TẠM aircraft (registration_id IS NULL) from report
+    tam_ids = {ac.id for ac in db.query(Aircraft).filter(Aircraft.registration_id.is_(None)).all()}
+
     sectors = (
         db.query(FlightSector)
         .filter(
@@ -277,9 +284,10 @@ def export_report(params: ReportParams, db: Session = Depends(get_db)):
         )
         .all()
     )
+    sectors = [s for s in sectors if s.aircraft_id not in tam_ids]
 
     airports = {ap.code: ap for ap in db.query(Airport).all()}
-    aircraft_list = db.query(Aircraft).order_by(Aircraft.line_order, Aircraft.id).all()
+    aircraft_list = [ac for ac in db.query(Aircraft).order_by(Aircraft.line_order, Aircraft.id).all() if ac.id not in tam_ids]
     aircraft_map = {ac.id: ac for ac in aircraft_list}
     reg_map = {reg.id: reg for reg in db.query(Registration).all()}
 
@@ -403,7 +411,8 @@ def export_report(params: ReportParams, db: Session = Depends(get_db)):
 # ── Full schedule export (JSON for file download/import) ────────────────────
 @router.get("/schedule")
 def export_schedule(db: Session = Depends(get_db)):
-    airports = [{"code": a.code, "name": a.name, "timezone_offset": a.timezone_offset}
+    airports = [{"code": a.code, "name": a.name, "timezone_offset": a.timezone_offset,
+                 "curfew_open": a.curfew_open, "curfew_close": a.curfew_close}
                 for a in db.query(Airport).all()]
     aircraft = [{"id": a.id, "registration": a.registration, "name": a.name,
                  "ac_type": a.ac_type, "line_order": a.line_order,
@@ -488,10 +497,16 @@ def import_schedule(payload: dict = Body(...), db: Session = Depends(get_db)):
         existing = db.query(Airport).filter(Airport.code == code).first()
         if not existing:
             db.add(Airport(code=code, name=ap_data.get("name", ""),
-                           timezone_offset=ap_data.get("timezone_offset", 7.0)))
+                           timezone_offset=ap_data.get("timezone_offset", 7.0),
+                           curfew_open=ap_data.get("curfew_open"),
+                           curfew_close=ap_data.get("curfew_close")))
         else:
             existing.name = ap_data.get("name") or existing.name
             existing.timezone_offset = ap_data.get("timezone_offset") if ap_data.get("timezone_offset") is not None else existing.timezone_offset
+            if ap_data.get("curfew_open") is not None:
+                existing.curfew_open = ap_data["curfew_open"]
+            if ap_data.get("curfew_close") is not None:
+                existing.curfew_close = ap_data["curfew_close"]
     db.commit()
 
     # Registrations (must come before aircraft for registration_id mapping)
