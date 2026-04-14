@@ -306,6 +306,18 @@ def export_report(params: ReportParams, db: Session = Depends(get_db)):
     per_aircraft: dict = defaultdict(lambda: {"block_minutes": 0, "sector_count": 0})
     per_route: dict = defaultdict(lambda: {"block_minutes": 0, "sector_count": 0, "dates": set(), "total_seats": 0})
 
+    # Domestic / International breakdown
+    dom_bm = 0
+    dom_sectors = 0
+    dom_seats = 0
+    intl_bm = 0
+    intl_sectors = 0
+    intl_seats = 0
+    dom_flight_dates: set = set()
+    intl_flight_dates: set = set()
+    per_aircraft_dom_bm: dict = defaultdict(int)
+    per_aircraft_intl_bm: dict = defaultdict(int)
+
     for s in sectors:
         bt = block_minutes(s.dep_utc, s.arr_utc)
         per_aircraft[s.aircraft_id]["block_minutes"] += bt
@@ -316,7 +328,8 @@ def export_report(params: ReportParams, db: Session = Depends(get_db)):
         # Seats for this sector
         ac = aircraft_map.get(s.aircraft_id)
         reg = reg_map.get(ac.registration_id) if ac and ac.registration_id else None
-        per_route[route_key]["total_seats"] += (reg.seats if reg else 0)
+        sector_seats = reg.seats if reg else 0
+        per_route[route_key]["total_seats"] += sector_seats
         # Use LCT date for unique-dates count when in LCT mode
         if params.timezone == "LCT":
             dep_ap = airports.get(s.origin, None)
@@ -324,6 +337,30 @@ def export_report(params: ReportParams, db: Session = Depends(get_db)):
             per_route[route_key]["dates"].add(lct_flight_date(s.flight_date, s.dep_utc, tz_off))
         else:
             per_route[route_key]["dates"].add(s.flight_date)
+
+        # Classify domestic vs international
+        orig_ap = airports.get(s.origin)
+        dest_ap = airports.get(s.destination)
+        is_dom = (orig_ap and orig_ap.is_domestic) and (dest_ap and dest_ap.is_domestic)
+        # Determine flight date for day counting
+        if params.timezone == "LCT":
+            dep_ap_tz = airports.get(s.origin, None)
+            tz_off_day = dep_ap_tz.timezone_offset if dep_ap_tz else 7.0
+            f_date = lct_flight_date(s.flight_date, s.dep_utc, tz_off_day)
+        else:
+            f_date = s.flight_date
+        if is_dom:
+            dom_bm += bt
+            dom_sectors += 1
+            dom_seats += sector_seats
+            dom_flight_dates.add(f_date)
+            per_aircraft_dom_bm[s.aircraft_id] += bt
+        else:
+            intl_bm += bt
+            intl_sectors += 1
+            intl_seats += sector_seats
+            intl_flight_dates.add(f_date)
+            per_aircraft_intl_bm[s.aircraft_id] += bt
 
     # Build aircraft rows
     period_days = max(
@@ -376,6 +413,25 @@ def export_report(params: ReportParams, db: Session = Depends(get_db)):
         return (pair, outbound)
     route_rows.sort(key=_pair_sort_key)
 
+    # Domestic / International breakdown for summary
+    num_ac = max(1, len(aircraft_rows))
+    dom_intl_breakdown = {
+        "domestic": {
+            "total_block_hours": round(dom_bm / 60, 2),
+            "total_sectors": dom_sectors,
+            "total_seats": dom_seats,
+            "avg_per_aircraft_block_hours": round(dom_bm / 60 / num_ac, 2),
+            "flight_days": len(dom_flight_dates),
+        },
+        "international": {
+            "total_block_hours": round(intl_bm / 60, 2),
+            "total_sectors": intl_sectors,
+            "total_seats": intl_seats,
+            "avg_per_aircraft_block_hours": round(intl_bm / 60 / num_ac, 2),
+            "flight_days": len(intl_flight_dates),
+        },
+    }
+
     if params.sort_by == "route":
         return {
             "period_start": params.period_start,
@@ -389,6 +445,7 @@ def export_report(params: ReportParams, db: Session = Depends(get_db)):
                 "avg_per_aircraft_block_hours": avg_bh,
                 "total_seats": grand_total_seats,
                 "total_sectors": grand_total_sectors,
+                "breakdown": dom_intl_breakdown,
             },
         }
 
@@ -404,6 +461,7 @@ def export_report(params: ReportParams, db: Session = Depends(get_db)):
             "avg_per_aircraft_block_hours": avg_bh,
             "total_seats": grand_total_seats,
             "total_sectors": grand_total_sectors,
+            "breakdown": dom_intl_breakdown,
         },
     }
 

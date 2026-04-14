@@ -20,6 +20,7 @@ class AirportBase(BaseModel):
     code: str
     name: str
     timezone_offset: float = 7.0
+    is_domestic: bool = True
     curfew_open: Optional[str] = None    # HH:MM local time, e.g. "06:00"
     curfew_close: Optional[str] = None   # HH:MM local time, e.g. "23:00"
 
@@ -113,6 +114,7 @@ class BlockTimeRuleBase(BaseModel):
     destination: str
     block_time_minutes: int
     ats: Optional[str] = None  # ATS route (đường bay không lưu)
+    distance_km: Optional[int] = None  # Khoảng cách (km)
 
 
 class BlockTimeRuleCreate(BlockTimeRuleBase):

@@ -64,7 +64,7 @@ def delete_airport(code: str, db: Session = Depends(get_db)):
 
 
 # ── TAT Rules ──────────────────────────────────────────────────────────────────
-MASS_TAT_STATIONS = {"__DOMESTIC__", "__INTL__"}
+MASS_TAT_STATIONS = {"__DOMESTIC__", "__INTL__", "__DOM_TO_INTL__", "__INTL_TO_DOM__"}
 
 
 @router.get("/tat", response_model=List[TATRuleOut])
@@ -74,19 +74,24 @@ def list_tat_rules(db: Session = Depends(get_db)):
 
 @router.get("/tat/mass")
 def get_mass_tat(db: Session = Depends(get_db)):
-    """Return the mass (default) TAT rules for domestic and international."""
+    """Return the mass (default) TAT rules for domestic, international, and transitions."""
     dom = db.query(TATRule).filter(TATRule.station == "__DOMESTIC__").first()
     intl = db.query(TATRule).filter(TATRule.station == "__INTL__").first()
+    d2i = db.query(TATRule).filter(TATRule.station == "__DOM_TO_INTL__").first()
+    i2d = db.query(TATRule).filter(TATRule.station == "__INTL_TO_DOM__").first()
     return {
         "domestic": dom.min_tat_minutes if dom else 40,
         "international": intl.min_tat_minutes if intl else 60,
+        "dom_to_intl": d2i.min_tat_minutes if d2i else 60,
+        "intl_to_dom": i2d.min_tat_minutes if i2d else 60,
     }
 
 
 @router.put("/tat/mass")
 def set_mass_tat(payload: dict, db: Session = Depends(get_db)):
-    """Save mass TAT defaults. Expects {domestic: int, international: int}."""
-    for key, station in [("domestic", "__DOMESTIC__"), ("international", "__INTL__")]:
+    """Save mass TAT defaults. Expects {domestic: int, international: int, dom_to_intl: int, intl_to_dom: int}."""
+    for key, station in [("domestic", "__DOMESTIC__"), ("international", "__INTL__"),
+                         ("dom_to_intl", "__DOM_TO_INTL__"), ("intl_to_dom", "__INTL_TO_DOM__")]:
         minutes = payload.get(key)
         if minutes is None:
             continue
@@ -156,7 +161,7 @@ def create_block_time_rule(payload: BlockTimeRuleCreate, db: Session = Depends(g
     ).first()
     if existing:
         raise HTTPException(409, f"Block time rule {orig}-{dest} đã tồn tại. Vui lòng sửa thay vì tạo mới.")
-    rule = BlockTimeRule(origin=orig, destination=dest, block_time_minutes=payload.block_time_minutes, ats=payload.ats)
+    rule = BlockTimeRule(origin=orig, destination=dest, block_time_minutes=payload.block_time_minutes, ats=payload.ats, distance_km=payload.distance_km)
     db.add(rule)
     db.commit()
     db.refresh(rule)
@@ -182,6 +187,7 @@ def update_block_time_rule(rule_id: int, payload: BlockTimeRuleCreate, db: Sessi
     rule.destination = dest
     rule.block_time_minutes = payload.block_time_minutes
     rule.ats = payload.ats
+    rule.distance_km = payload.distance_km
     db.commit()
     db.refresh(rule)
     return rule
@@ -297,11 +303,11 @@ def export_blocktime_excel(db: Session = Depends(get_db)):
     ws.title = "Block Time Rules"
     
     # Header
-    ws.append(["Origin", "Destination", "Block Time", "Decimal", "ATS"])
+    ws.append(["Origin", "Destination", "Block Time", "Decimal", "ATS", "Distance (km)"])
     
     # Data
     for r in rules:
-        ws.append([r.origin, r.destination, minutes_to_hhmm(r.block_time_minutes), minutes_to_decimal(r.block_time_minutes), r.ats or ""])
+        ws.append([r.origin, r.destination, minutes_to_hhmm(r.block_time_minutes), minutes_to_decimal(r.block_time_minutes), r.ats or "", r.distance_km or ""])
     
     # Auto-width columns
     for col in ws.columns:
@@ -337,6 +343,7 @@ async def import_blocktime_excel(file: UploadFile = File(...), db: Session = Dep
         time_str = str(row[2]).strip()
         minutes = hhmm_to_minutes(time_str)
         ats = str(row[4]).strip() if len(row) > 4 and row[4] else None
+        distance_km = int(row[5]) if len(row) > 5 and row[5] and str(row[5]).strip() else None
         
         existing = db.query(BlockTimeRule).filter(
             BlockTimeRule.origin == origin,
@@ -345,8 +352,9 @@ async def import_blocktime_excel(file: UploadFile = File(...), db: Session = Dep
         if existing:
             existing.block_time_minutes = minutes
             existing.ats = ats
+            existing.distance_km = distance_km
         else:
-            db.add(BlockTimeRule(origin=origin, destination=dest, block_time_minutes=minutes, ats=ats))
+            db.add(BlockTimeRule(origin=origin, destination=dest, block_time_minutes=minutes, ats=ats, distance_km=distance_km))
         imported += 1
     
     db.commit()

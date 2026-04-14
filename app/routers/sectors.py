@@ -301,6 +301,7 @@ def get_warnings(
     default_tat_intl = tat_map.pop("__INTL__", 60)
     # Build airport timezone lookup for domestic/intl classification
     airport_tz = {ap.code: ap.timezone_offset for ap in db.query(Airport).all()}
+    airport_dom = {ap.code: bool(ap.is_domestic) for ap in db.query(Airport).all()}
     # Build curfew lookup: {code: (open, close)} — only airports with curfew set
     airport_curfew = {}
     for ap in db.query(Airport).all():
@@ -407,9 +408,9 @@ def get_warnings(
                     gap += 1440
                 min_tat = tat_map.get(s.destination, None)
                 if min_tat is None:
-                    # Use mass TAT: domestic if tz == 7, else international
-                    tz = airport_tz.get(s.destination, 0)
-                    min_tat = default_tat_domestic if tz == 7 else default_tat_intl
+                    # Use mass TAT: domestic if is_domestic, else international
+                    is_dom = airport_dom.get(s.destination, False)
+                    min_tat = default_tat_domestic if is_dom else default_tat_intl
                 if gap < min_tat:
                     warnings.append({
                         "type": "TAT",
@@ -471,8 +472,8 @@ def get_warnings(
 
                 min_tat = tat_map.get(prev_sector.destination, None)
                 if min_tat is None:
-                    tz = airport_tz.get(prev_sector.destination, 0)
-                    min_tat = default_tat_domestic if tz == 7 else default_tat_intl
+                    is_dom = airport_dom.get(prev_sector.destination, False)
+                    min_tat = default_tat_domestic if is_dom else default_tat_intl
 
                 if gap < min_tat:
                     warnings.append({

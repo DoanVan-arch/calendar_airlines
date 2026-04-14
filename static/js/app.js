@@ -10,7 +10,7 @@ const state = {
   airports    : {},             // keyed by code
   blockTimeRules: {},           // keyed by "ORIG-DEST"
   tatRules    : {},             // keyed by station
-  massTAT     : { domestic: 40, international: 60 },
+  massTAT     : { domestic: 40, international: 60, dom_to_intl: 60, intl_to_dom: 60 },
   warnings    : [],
   seasons     : [],             // Season objects from API
   registrations: [],            // Registration objects from API
@@ -1124,7 +1124,7 @@ function openSectorModal(sector = null) {
     document.getElementById("sectorDep").value = sector.dep_utc;
     document.getElementById("sectorArr").value = sector.arr_utc;
     const bt = blockMin(sector.dep_utc, sector.arr_utc);
-    document.getElementById("sectorBlockTime").value = bt;
+    document.getElementById("sectorBlockTime").value = bt > 0 ? minToTime(bt) : "";
     title.textContent = "Chỉnh sửa chặng bay";
   } else {
     document.getElementById("sectorDep").value = "";
@@ -1151,13 +1151,13 @@ function autoFillArr() {
   // Convert dep to UTC for rule lookup (rules always stored in UTC)
   const depUTC = sectorModalTZ === "LCT" ? applyTZ(dep, -getOriginOffset()) : dep;
 
-  let btMin = parseInt(btInput, 10);
+  let btMin = btInput ? timeToMin(btInput) : 0;
   const ruleKey = `${orig}-${dest}`;
   const rule = state.blockTimeRules[ruleKey];
 
   if (!btMin && rule) {
     btMin = rule.block_time_minutes;
-    document.getElementById("sectorBlockTime").value = btMin;
+    document.getElementById("sectorBlockTime").value = minToTime(btMin);
   }
 
   if (btMin > 0) {
@@ -1176,7 +1176,7 @@ function autoFillArr() {
       const box = document.getElementById("sectorWarningBox");
       box.classList.remove("hidden");
       box.textContent = `⚠ Block time nhập ${Math.abs(diff)} phút ${diff > 0 ? "dài hơn" : "ngắn hơn"} kế hoạch ` +
-                        `(${enteredBT} vs ${rule.block_time_minutes} phút)`;
+                        `(${minToTime(enteredBT)} vs ${minToTime(rule.block_time_minutes)})`;
     } else {
       document.getElementById("sectorWarningBox").classList.add("hidden");
     }
@@ -1444,13 +1444,38 @@ function _parseChainRoutes() {
   }).filter(Boolean);
 }
 
-function _getTATForStation(station) {
+/**
+ * Get TAT for a turnaround at `station`.
+ * @param {string} station     – The turnaround airport (where aircraft is on the ground)
+ * @param {string} [prevOrigin]  – Origin of the inbound (previous) sector
+ * @param {string} [nextDest]    – Destination of the outbound (next) sector
+ * If both prevOrigin and nextDest are provided and the inbound/outbound legs have
+ * different domestic/international types, use the transition TAT.
+ */
+function _getTATForStation(station, prevOrigin, nextDest) {
+  // 1. Station-specific rule always wins
   if (state.tatRules && state.tatRules[station]) {
     return state.tatRules[station].min_tat_minutes;
   }
+
+  const mass = state.massTAT || { domestic: 40, international: 60, dom_to_intl: 60, intl_to_dom: 60 };
+
+  // 2. Check for transition TAT if we know inbound origin + outbound destination
+  if (prevOrigin && nextDest) {
+    const apPrev = state.airports && state.airports[prevOrigin];
+    const apNext = state.airports && state.airports[nextDest];
+    const prevDom = apPrev && apPrev.is_domestic;
+    const nextDom = apNext && apNext.is_domestic;
+    // Only apply transition TAT if leg types differ
+    if (prevDom !== undefined && nextDom !== undefined && prevDom !== nextDom) {
+      if (prevDom && !nextDom) return mass.dom_to_intl || mass.international;
+      if (!prevDom && nextDom) return mass.intl_to_dom || mass.domestic;
+    }
+  }
+
+  // 3. Fallback: station-based domestic/international mass TAT
   const ap = state.airports && state.airports[station];
-  const isDomestic = ap && ap.timezone_offset === 7;
-  const mass = state.massTAT || { domestic: 40, international: 60 };
+  const isDomestic = ap && ap.is_domestic;
   return isDomestic ? mass.domestic : mass.international;
 }
 
@@ -1483,7 +1508,7 @@ function _buildChainPreview() {
     // TAT for this station (after arrival)
     let tatMin = 0;
     if (i < routes.length - 1) {
-      tatMin = _getTATForStation(r.destination);
+      tatMin = _getTATForStation(r.destination, r.origin, routes[i + 1].destination);
     }
 
     rows.push({
@@ -1856,7 +1881,7 @@ async function handleSectorDrop(sectorIds, fromAcId, toAcId) {
 }
 
 // ─── Time drag (same-row: change departure/arrival time) ─────────────────────
-async function handleSectorTimeChange(sectorIdOrIds, newDepUtc, newArrUtc, deltaMin) {
+async function handleSectorTimeChange(sectorIdOrIds, newDepUtc, newArrUtc, deltaMin, newFlightDate) {
   // Multi-select time shift: sectorIdOrIds is an array, deltaMin is provided
   if (Array.isArray(sectorIdOrIds)) {
     const ids = sectorIdOrIds;
@@ -1866,33 +1891,41 @@ async function handleSectorTimeChange(sectorIdOrIds, newDepUtc, newArrUtc, delta
       const sector = state.sectors.find(s => s.id === sectorId)
                   || (state.allSectors && state.allSectors.find(s => s.id === sectorId));
       if (!sector) continue;
-      const dep = timeToMin(sector.dep_utc);
-      let   arr = timeToMin(sector.arr_utc);
+      const dayOff = sector._dayOffset || 0;
+      const dep = timeToMin(sector.dep_utc) + dayOff * 1440;
+      let   arr = timeToMin(sector.arr_utc) + dayOff * 1440;
       if (arr <= dep) arr += 1440;
       const bt = arr - dep;
       const newDep = Math.max(0, Math.min(MINUTES_TOTAL() - bt, dep + deltaMin));
       const newArr = newDep + bt;
+      const newDayOff = Math.floor(newDep / 1440);
+      // Compute flight_date from base date + newDayOff
+      const baseD = new Date(state.currentDate + "T00:00:00");
+      baseD.setDate(baseD.getDate() + newDayOff);
+      const fd = `${baseD.getFullYear()}-${String(baseD.getMonth()+1).padStart(2,"0")}-${String(baseD.getDate()).padStart(2,"0")}`;
       updates.push({
         sectorId,
         prevDep: sector.dep_utc,
         prevArr: sector.arr_utc,
+        prevDate: sector.flight_date,
         newDep: minToTime(newDep),
         newArr: minToTime(newArr),
+        newDate: fd,
       });
     }
     if (updates.length === 0) return;
     try {
       for (const u of updates) {
-        await API.updateSector(u.sectorId, { dep_utc: u.newDep, arr_utc: u.newArr });
+        await API.updateSector(u.sectorId, { dep_utc: u.newDep, arr_utc: u.newArr, flight_date: u.newDate });
       }
       history.push({
         label: `Đổi giờ ${updates.length} chuyến: ${deltaMin > 0 ? "+" : ""}${deltaMin} phút`,
         undo: async () => {
-          for (const u of updates) await API.updateSector(u.sectorId, { dep_utc: u.prevDep, arr_utc: u.prevArr });
+          for (const u of updates) await API.updateSector(u.sectorId, { dep_utc: u.prevDep, arr_utc: u.prevArr, flight_date: u.prevDate });
           await refreshGantt();
         },
         redo: async () => {
-          for (const u of updates) await API.updateSector(u.sectorId, { dep_utc: u.newDep, arr_utc: u.newArr });
+          for (const u of updates) await API.updateSector(u.sectorId, { dep_utc: u.newDep, arr_utc: u.newArr, flight_date: u.newDate });
           await refreshGantt();
         },
       });
@@ -1911,12 +1944,17 @@ async function handleSectorTimeChange(sectorIdOrIds, newDepUtc, newArrUtc, delta
   if (!sector) return;
   const prevDep = sector.dep_utc;
   const prevArr = sector.arr_utc;
+  const prevDate = sector.flight_date;
+  const payload = { dep_utc: newDepUtc, arr_utc: newArrUtc };
+  if (newFlightDate && newFlightDate !== sector.flight_date) {
+    payload.flight_date = newFlightDate;
+  }
   try {
-    await API.updateSector(sectorId, { dep_utc: newDepUtc, arr_utc: newArrUtc });
+    await API.updateSector(sectorId, payload);
     history.push({
-      label: `Đổi giờ ${sector.origin}→${sector.destination}: ${newDepUtc}–${newArrUtc}`,
-      undo: async () => { await API.updateSector(sectorId, { dep_utc: prevDep, arr_utc: prevArr }); await refreshGantt(); },
-      redo: async () => { await API.updateSector(sectorId, { dep_utc: newDepUtc, arr_utc: newArrUtc }); await refreshGantt(); },
+      label: `Đổi giờ ${sector.origin}→${sector.destination}: ${newDepUtc}–${newArrUtc}${newFlightDate && newFlightDate !== prevDate ? " (" + newFlightDate + ")" : ""}`,
+      undo: async () => { await API.updateSector(sectorId, { dep_utc: prevDep, arr_utc: prevArr, flight_date: prevDate }); await refreshGantt(); },
+      redo: async () => { await API.updateSector(sectorId, payload); await refreshGantt(); },
     });
     await refreshGantt();
   } catch (e) {
@@ -1946,18 +1984,30 @@ async function loadMassTAT() {
     const mass = await API.getMassTAT();
     doc("massTATDomestic").value = minToTime(mass.domestic);
     doc("massTATIntl").value = minToTime(mass.international);
+    doc("massTATDomToIntl").value = minToTime(mass.dom_to_intl ?? 60);
+    doc("massTATIntlToDom").value = minToTime(mass.intl_to_dom ?? 60);
   } catch { /* defaults from HTML */ }
 }
 
 async function saveMassTAT() {
   const domTime = doc("massTATDomestic").value;
   const intlTime = doc("massTATIntl").value;
-  if (!domTime || !intlTime) { alert("Điền đầy đủ thông tin"); return; }
+  const d2iTime = doc("massTATDomToIntl").value;
+  const i2dTime = doc("massTATIntlToDom").value;
+  if (!domTime || !intlTime || !d2iTime || !i2dTime) { alert("Điền đầy đủ thông tin"); return; }
   try {
     await API.setMassTAT({
       domestic: timeToMin(domTime),
-      international: timeToMin(intlTime)
+      international: timeToMin(intlTime),
+      dom_to_intl: timeToMin(d2iTime),
+      intl_to_dom: timeToMin(i2dTime)
     });
+    state.massTAT = {
+      domestic: timeToMin(domTime),
+      international: timeToMin(intlTime),
+      dom_to_intl: timeToMin(d2iTime),
+      intl_to_dom: timeToMin(i2dTime)
+    };
     alert("Đã lưu rule mặc định!");
   } catch (err) {
     alert("Lỗi: " + err.message);
@@ -1979,7 +2029,7 @@ async function renderTATTable() {
     for (const r of rules) {
       const ap = state.airports[r.station];
       if (ap) {
-        const shouldBeDom = ap.timezone_offset === 7;
+        const shouldBeDom = ap.is_domestic;
         if (r.is_domestic !== shouldBeDom) {
           syncPromises.push(
             API.updateTATRule(r.id, { station: r.station, min_tat_minutes: r.min_tat_minutes, is_domestic: shouldBeDom }).catch(() => {})
@@ -1996,7 +2046,7 @@ async function renderTATTable() {
     // Prefer airport-derived type if airport is known
     const ap = state.airports[r.station];
     let resolvedDomestic = r.is_domestic;
-    if (ap) resolvedDomestic = ap.timezone_offset === 7;
+    if (ap) resolvedDomestic = ap.is_domestic;
 
     let typeLabel, typeClass;
     if (resolvedDomestic === true) {
@@ -2037,8 +2087,9 @@ async function renderBTTable() {
       <td>${timeStr}</td>
       <td class="decimal-cell">${decStr}</td>
       <td>${r.ats || ""}</td>
+      <td>${r.distance_km || ""}</td>
       <td class="action-cell admin-only" style="display:${isAdmin ? "" : "none"}">
-        <button class="btn btn-secondary btn-sm" onclick="editBT(${r.id},'${r.origin}','${r.destination}',${r.block_time_minutes},'${(r.ats || "").replace(/'/g, "\\'")}')">Sửa</button>
+        <button class="btn btn-secondary btn-sm" onclick="editBT(${r.id},'${r.origin}','${r.destination}',${r.block_time_minutes},'${(r.ats || "").replace(/'/g, "\\'")}',${r.distance_km ?? 'null'})">Sửa</button>
         <button class="btn btn-danger btn-sm" onclick="deleteBT(${r.id})">Xoá</button>
       </td>`;
     tbody.appendChild(tr);
@@ -2053,7 +2104,7 @@ function editTAT(id, station, min, isDomestic) {
   const sel = doc("tatIsDomestic");
   const ap = state.airports[station];
   if (ap) {
-    const derived = ap.timezone_offset === 7;
+    const derived = ap.is_domestic;
     sel.value = derived ? "true" : "false";
     sel.disabled = true;
     sel.title = "Tự động từ múi giờ sân bay";
@@ -2068,12 +2119,13 @@ function editTAT(id, station, min, isDomestic) {
   doc("tatFormModal").classList.remove("hidden");
 }
 
-function editBT(id, orig, dest, min, ats) {
+function editBT(id, orig, dest, min, ats, distKm) {
   doc("btId").value = id;
   doc("btOrigin").value = orig;
   doc("btDest").value = dest;
   doc("btTime").value = minToTime(min);
   doc("btATS").value = ats || "";
+  doc("btDistKm").value = distKm != null ? distKm : "";
   doc("btFormTitle").textContent = "Chỉnh sửa Block Time Rule";
   doc("btFormModal").classList.remove("hidden");
 }
@@ -2102,7 +2154,7 @@ async function saveTAT() {
   let is_domestic;
   const isDomRaw = doc("tatIsDomestic").value;
   if (ap) {
-    is_domestic = ap.timezone_offset === 7;
+    is_domestic = ap.is_domestic;
   } else if (isDomRaw !== "") {
     is_domestic = isDomRaw === "true";
   } else {
@@ -2123,9 +2175,11 @@ async function saveBT() {
   const dest = doc("btDest").value.toUpperCase().trim();
   const timeStr = doc("btTime").value;
   const ats  = doc("btATS").value.trim();
+  const distKmRaw = doc("btDistKm").value.trim();
   if (!orig || !dest || !timeStr) { alert("Điền đầy đủ thông tin"); return; }
   const min = timeToMin(timeStr);
-  const data = { origin: orig, destination: dest, block_time_minutes: min, ats: ats || null };
+  const distKm = distKmRaw ? parseInt(distKmRaw, 10) : null;
+  const data = { origin: orig, destination: dest, block_time_minutes: min, ats: ats || null, distance_km: distKm };
   try {
     if (id) await API.updateBlockTimeRule(parseInt(id,10), data);
     else    await API.createBlockTimeRule(data);
@@ -2357,7 +2411,7 @@ async function renderAirportTable() {
   const tbody = doc("airportTableBody");
   tbody.innerHTML = "";
   for (const ap of Object.values(state.airports)) {
-    const isDom = ap.timezone_offset === 7;
+    const isDom = ap.is_domestic;
     const typeLabel = isDom ? "Nội địa" : "Quốc tế";
     const typeClass = isDom ? "tag-domestic" : "tag-intl";
     const curfewLabel = (ap.curfew_open && ap.curfew_close)
@@ -2386,7 +2440,7 @@ function editAirport(code) {
   doc("apCodeInput").disabled = true;
   doc("apName").value = ap.name;
   doc("apTZ").value = ap.timezone_offset;
-  doc("apType").value = ap.timezone_offset === 7 ? "domestic" : "international";
+  doc("apType").value = ap.is_domestic ? "domestic" : "international";
   doc("apCurfewOpen").value = ap.curfew_open || "";
   doc("apCurfewClose").value = ap.curfew_close || "";
   doc("airportFormTitle").textContent = "Chỉnh sửa sân bay";
@@ -2405,11 +2459,13 @@ async function saveAirport() {
   const code = doc("apCodeInput").value.toUpperCase().trim();
   const name = doc("apName").value.trim();
   const tz   = parseFloat(doc("apTZ").value);
+  const apType = doc("apType").value;
+  const isDom = apType === "domestic";
   const curfewOpen  = doc("apCurfewOpen").value || null;
   const curfewClose = doc("apCurfewClose").value || null;
   if (!code || !name || isNaN(tz)) { alert("Điền đầy đủ thông tin"); return; }
   const existing = doc("apCode").value;
-  const payload = { code, name, timezone_offset: tz, curfew_open: curfewOpen, curfew_close: curfewClose };
+  const payload = { code, name, timezone_offset: tz, is_domestic: isDom, curfew_open: curfewOpen, curfew_close: curfewClose };
   try {
     if (existing) await API.updateAirport(existing, payload);
     else          await API.createAirport(payload);
@@ -2420,7 +2476,6 @@ async function saveAirport() {
     doc("apCurfewClose").value = "";
     state.airports = Object.fromEntries((await API.getAirports()).map(ap => [ap.code, ap]));
     // Sync TAT rules: update is_domestic for ALL TAT rules matching this airport code
-    const isDom = tz === 7;
     const allTatRules = await API.getTATRules().catch(() => []);
     const syncPromises = [];
     for (const r of allTatRules) {
@@ -2503,11 +2558,26 @@ function renderTimetableTable(data) {
       chip.textContent = rt;
       chip.style.cssText = "font-size:10px;padding:2px 8px;border-radius:12px;";
       chip.addEventListener("click", () => {
-        chip.classList.toggle("active");
-        if (chip.classList.contains("active")) {
-          state._ttActiveRoutes.add(rt);
-        } else {
+        const parts = rt.split("-");
+        const reverseRt = parts.length === 2 ? (parts[1] + "-" + parts[0]) : null;
+        const isActive = chip.classList.contains("active");
+        // Toggle this chip + its reverse pair
+        if (isActive) {
+          chip.classList.remove("active");
           state._ttActiveRoutes.delete(rt);
+          if (reverseRt) {
+            state._ttActiveRoutes.delete(reverseRt);
+            const revChip = chipsEl.querySelector(`[data-route="${reverseRt}"]`);
+            if (revChip) revChip.classList.remove("active");
+          }
+        } else {
+          chip.classList.add("active");
+          state._ttActiveRoutes.add(rt);
+          if (reverseRt) {
+            state._ttActiveRoutes.add(reverseRt);
+            const revChip = chipsEl.querySelector(`[data-route="${reverseRt}"]`);
+            if (revChip) revChip.classList.add("active");
+          }
         }
         _applyTTFilter(el, sortBar);
       });
@@ -2533,7 +2603,29 @@ function renderTimetableTable(data) {
   // Mark default as active
   sortBar.querySelector('[data-sort="default"]').classList.add("active");
 
-  _renderTTRows(el, data);
+  // Apply dom/intl filter to initial render
+  const filteredRows = _applyDomIntlFilter(data.rows);
+  _renderTTRows(el, { ...data, rows: filteredRows });
+}
+
+/** Classify a timetable row as domestic or international.
+ *  Domestic = both origin and destination have is_domestic === true */
+function _isTTRowDomestic(r) {
+  const orig = r.origin || (r.route && r.route.split("-")[0]);
+  const dest = r.destination || (r.route && r.route.split("-")[1]);
+  const apO = state.airports[orig];
+  const apD = state.airports[dest];
+  const oDom = apO && apO.is_domestic;
+  const dDom = apD && apD.is_domestic;
+  return oDom && dDom;
+}
+
+/** Apply dom/intl filter to rows */
+function _applyDomIntlFilter(rows) {
+  const filter = doc("expDomIntl") ? doc("expDomIntl").value : "all";
+  if (filter === "domestic") return rows.filter(r => _isTTRowDomestic(r));
+  if (filter === "international") return rows.filter(r => !_isTTRowDomestic(r));
+  return rows;
 }
 
 /** Apply current route filter, then re-sort and render */
@@ -2541,10 +2633,19 @@ function _applyTTFilter(el, sortBar) {
   const d = state._ttDisplayData;
   if (!d) return;
   let rows = state._ttAllRows;
+  // Domestic / international filter
+  rows = _applyDomIntlFilter(rows);
   if (state._ttActiveRoutes && state._ttActiveRoutes.size > 0) {
+    // Build pair-aware set: for each selected route, also include its reverse
+    const pairSet = new Set();
+    for (const rt of state._ttActiveRoutes) {
+      pairSet.add(rt);
+      const parts = rt.split("-");
+      if (parts.length === 2) pairSet.add(parts[1] + "-" + parts[0]);
+    }
     rows = rows.filter(r => {
       const rt = r.route || (r.origin + "-" + r.destination);
-      return state._ttActiveRoutes.has(rt);
+      return pairSet.has(rt);
     });
   }
   const activeBtn = sortBar.querySelector(".tt-sort-btn.active");
@@ -2558,10 +2659,19 @@ function _applyTTSort(sortMode, el, sortBar) {
   const d = state._ttDisplayData;
   if (!d) return;
   let rows = state._ttAllRows;
+  // Domestic / international filter
+  rows = _applyDomIntlFilter(rows);
   if (state._ttActiveRoutes && state._ttActiveRoutes.size > 0) {
+    // Build pair-aware set: for each selected route, also include its reverse
+    const pairSet = new Set();
+    for (const rt of state._ttActiveRoutes) {
+      pairSet.add(rt);
+      const parts = rt.split("-");
+      if (parts.length === 2) pairSet.add(parts[1] + "-" + parts[0]);
+    }
     rows = rows.filter(r => {
       const rt = r.route || (r.origin + "-" + r.destination);
-      return state._ttActiveRoutes.has(rt);
+      return pairSet.has(rt);
     });
   }
   const sorted = _sortTTRows([...rows], sortMode);
@@ -2626,7 +2736,7 @@ function _renderTTRows(container, data) {
     // First, sort by route (pair-grouped) for proper grouping
     const sorted = _sortTTRows([...data.rows], "route");
     const hdr = `<tr>
-      <th>Tàu</th><th>Chuyến</th><th>Chặng bay</th>
+      <th>Tàu</th><th>Chặng bay</th><th>Chuyến</th>
       <th>Cất (${data.timezone})</th><th>Hạ (${data.timezone})</th>
       <th>Block</th><th>Ngày bay</th><th>Day</th><th>Số CB</th><th>Ghế</th></tr>`;
     let rowsHtml = "";
@@ -2638,8 +2748,8 @@ function _renderTTRows(container, data) {
       const acDisplay = r.aircraft_reg || (r.aircraft ? r.aircraft.join(", ") : "");
       rowsHtml += `<tr>
         <td>${acDisplay}</td>
-        <td>${r.flight_number || ""}</td>
         <td style="font-weight:${showRoute ? "bold" : "normal"}">${showRoute ? route : ""}</td>
+        <td>${r.flight_number || ""}</td>
         <td>${r.dep_display}</td><td>${r.arr_display}</td>
         <td>${minToHHMM(r.block_time_minutes)}</td>
         <td>${r.date_range || r.flight_date || ""}</td>
@@ -2651,13 +2761,13 @@ function _renderTTRows(container, data) {
       `<table class="tt-table"><thead>${hdr}</thead><tbody>${rowsHtml}</tbody></table>`);
   } else if (data.mode === "daily") {
     const hdr = `<tr>
-      <th>Tàu</th><th>Chuyến</th><th>Chặng bay</th>
+      <th>Tàu</th><th>Chặng bay</th><th>Chuyến</th>
       <th>Cất (${data.timezone})</th><th>Hạ (${data.timezone})</th>
       <th>Block</th><th>Ngày bay</th><th>Day</th><th>Số CB</th><th>Ghế</th></tr>`;
     const rows = data.rows.map(r => `<tr>
       <td>${r.aircraft_reg}</td>
-      <td>${r.flight_number || ""}</td>
       <td>${r.route || r.origin + "-" + r.destination}</td>
+      <td>${r.flight_number || ""}</td>
       <td>${r.dep_display}</td><td>${r.arr_display}</td>
       <td>${minToHHMM(r.block_time_minutes)}</td>
       <td>${r.date_range || r.flight_date || ""}</td><td>${r.day_of_week}</td>
@@ -2667,13 +2777,13 @@ function _renderTTRows(container, data) {
       `<table class="tt-table"><thead>${hdr}</thead><tbody>${rows}</tbody></table>`);
   } else {
     const hdr = `<tr>
-      <th>Tàu</th><th>Chuyến</th><th>Chặng bay</th>
+      <th>Tàu</th><th>Chặng bay</th><th>Chuyến</th>
       <th>Cất (${data.timezone})</th><th>Hạ (${data.timezone})</th>
       <th>Block</th><th>Ngày bay</th><th>Day</th><th>Số CB</th><th>Ghế</th></tr>`;
     const rows = data.rows.map(r => `<tr>
       <td>${r.aircraft ? r.aircraft.join(", ") : ""}</td>
-      <td>${r.flight_number || ""}</td>
       <td>${r.route || r.origin + "-" + r.destination}</td>
+      <td>${r.flight_number || ""}</td>
       <td>${r.dep_display}</td><td>${r.arr_display}</td>
       <td>${minToHHMM(r.block_time_minutes)}</td>
       <td>${r.date_range}</td><td>${r.day_of_week}</td>
@@ -2715,27 +2825,51 @@ function renderReport(data) {
   const el = doc("reportResult");
   el.innerHTML = "";
 
+  const bd = data.summary.breakdown || {};
+  const dom = bd.domestic || {};
+  const intl = bd.international || {};
+
   const summary = `
     <div class="report-summary">
       <div class="stat-item">
         <div class="stat-value">${data.summary.total_block_hours}h</div>
         <div class="stat-label">Tổng Block Hours</div>
+        <div class="stat-breakdown">
+          <span class="tag-domestic">NĐ: ${dom.total_block_hours || 0}h</span>
+          <span class="tag-intl">QT: ${intl.total_block_hours || 0}h</span>
+        </div>
       </div>
       <div class="stat-item">
         <div class="stat-value">${data.summary.avg_per_aircraft_block_hours}h</div>
         <div class="stat-label">Trung bình / tàu</div>
+        <div class="stat-breakdown">
+          <span class="tag-domestic">NĐ: ${dom.avg_per_aircraft_block_hours || 0}h</span>
+          <span class="tag-intl">QT: ${intl.avg_per_aircraft_block_hours || 0}h</span>
+        </div>
       </div>
       <div class="stat-item">
         <div class="stat-value">${data.period_days}</div>
         <div class="stat-label">Số ngày</div>
+        <div class="stat-breakdown">
+          <span class="tag-domestic">NĐ: ${dom.flight_days || 0}</span>
+          <span class="tag-intl">QT: ${intl.flight_days || 0}</span>
+        </div>
       </div>
       <div class="stat-item">
         <div class="stat-value">${data.summary.total_sectors || 0}</div>
         <div class="stat-label">Tổng chặng</div>
+        <div class="stat-breakdown">
+          <span class="tag-domestic">NĐ: ${dom.total_sectors || 0}</span>
+          <span class="tag-intl">QT: ${intl.total_sectors || 0}</span>
+        </div>
       </div>
       <div class="stat-item">
         <div class="stat-value">${(data.summary.total_seats || 0).toLocaleString()}</div>
         <div class="stat-label">Tổng ghế</div>
+        <div class="stat-breakdown">
+          <span class="tag-domestic">NĐ: ${(dom.total_seats || 0).toLocaleString()}</span>
+          <span class="tag-intl">QT: ${(intl.total_seats || 0).toLocaleString()}</span>
+        </div>
       </div>
     </div>`;
 
@@ -3524,6 +3658,22 @@ async function confirmSwap() {
 // ─── Edit aircraft from Gantt label ──────────────────────────────────────────
 document.addEventListener("edit-aircraft", e => openAircraftModal(e.detail));
 
+// ─── Table search helper ─────────────────────────────────────────────────────
+function _bindTableSearch(inputId, tbodyId) {
+  const input = doc(inputId);
+  if (!input) return;
+  input.addEventListener("input", () => {
+    const query = input.value.toLowerCase().trim();
+    const tbody = doc(tbodyId);
+    if (!tbody) return;
+    const rows = tbody.querySelectorAll("tr");
+    for (const row of rows) {
+      const text = row.textContent.toLowerCase();
+      row.style.display = (!query || text.includes(query)) ? "" : "none";
+    }
+  });
+}
+
 // ─── Main UI bindings ─────────────────────────────────────────────────────────
 function bindUI() {
   // ── 24h time input auto-format for all .time-input-24h fields ────────────
@@ -3711,7 +3861,7 @@ function bindUI() {
       // Compute block time in UTC
       const depUTC = sectorModalTZ === "LCT" ? applyTZ(dep, -getOriginOffset()) : dep;
       const arrUTC = sectorModalTZ === "LCT" ? applyTZ(arr, -getDestOffset())   : arr;
-      doc("sectorBlockTime").value = blockMin(depUTC, arrUTC);
+      doc("sectorBlockTime").value = minToTime(blockMin(depUTC, arrUTC));
     }
     autoFillArr();
   });
@@ -3753,7 +3903,7 @@ function bindUI() {
     const ap = state.airports[code];
     const sel = doc("tatIsDomestic");
     if (ap) {
-      sel.value = ap.timezone_offset === 7 ? "true" : "false";
+      sel.value = ap.is_domestic ? "true" : "false";
       sel.disabled = true;
       sel.title = "Tự động từ múi giờ sân bay";
     } else {
@@ -3771,6 +3921,7 @@ function bindUI() {
     doc("btDest").value = "";
     doc("btTime").value = "01:30";
     doc("btATS").value = "";
+    doc("btDistKm").value = "";
     doc("btFormTitle").textContent = "Thêm Block Time Rule";
     doc("btFormModal").classList.remove("hidden");
   });
@@ -3847,6 +3998,13 @@ function bindUI() {
 
   // Export modal
   doc("btnRunExport").addEventListener("click", runExport);
+  doc("expDomIntl").addEventListener("change", () => {
+    // Re-render with existing data when dom/intl filter changes
+    if (state.lastExportData) {
+      state.lastExportData.displayMode = doc("expDisplay").value;
+      renderTimetableTable(state.lastExportData);
+    }
+  });
   doc("btnDownloadTT").addEventListener("click", () => {
     if (state.lastExportData) downloadJSON(state.lastExportData, "timetable.json");
     else alert("Hãy xem trước rồi tải.");
@@ -3914,6 +4072,27 @@ function bindUI() {
   if (_btnSaveNote) _btnSaveNote.addEventListener("click", saveNote);
   const _btnDeleteNote = doc("btnDeleteNote");
   if (_btnDeleteNote) _btnDeleteNote.addEventListener("click", deleteNoteById);
+
+  // Footer info popup toggle
+  const _btnFooterInfo = doc("btnFooterInfo");
+  const _footerPopup = doc("footerInfoPopup");
+  if (_btnFooterInfo && _footerPopup) {
+    _btnFooterInfo.addEventListener("click", (e) => {
+      e.stopPropagation();
+      _footerPopup.classList.toggle("hidden");
+    });
+    document.addEventListener("click", (e) => {
+      if (!_footerPopup.classList.contains("hidden") && !_footerPopup.contains(e.target) && e.target !== _btnFooterInfo) {
+        _footerPopup.classList.add("hidden");
+      }
+    });
+  }
+
+  // Table search filters
+  _bindTableSearch("searchTAT", "tatTableBody");
+  _bindTableSearch("searchBT", "btTableBody");
+  _bindTableSearch("searchAirport", "airportTableBody");
+  _bindTableSearch("searchReg", "regTableBody");
 }
 
 // ─── Note modal ──────────────────────────────────────────────────────────────

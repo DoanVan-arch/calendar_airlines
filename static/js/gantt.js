@@ -608,16 +608,25 @@ class GanttChart {
     const gapMin = depMin - arrMin;
     if (gapMin <= 0) return null;  // overlapping or no gap
 
-    // Determine required TAT (station-specific or mass default)
+    // Determine required TAT (station-specific or mass default, with transition support)
     const dest = prev.destination;
     let reqTAT;
     if (state.tatRules && state.tatRules[dest]) {
       reqTAT = state.tatRules[dest].min_tat_minutes;
     } else {
-      const ap = state.airports && state.airports[dest];
-      const isDomestic = ap && ap.timezone_offset === 7;
-      const mass = state.massTAT || { domestic: 40, international: 60 };
-      reqTAT = isDomestic ? mass.domestic : mass.international;
+      const mass = state.massTAT || { domestic: 40, international: 60, dom_to_intl: 60, intl_to_dom: 60 };
+      // Check for transition TAT (previous leg type ≠ next leg type)
+      const apPrev = state.airports && state.airports[prev.origin];
+      const apNext = state.airports && state.airports[next.destination];
+      const prevDom = apPrev && apPrev.is_domestic;
+      const nextDom = apNext && apNext.is_domestic;
+      if (prevDom !== undefined && nextDom !== undefined && prevDom !== nextDom) {
+        reqTAT = prevDom ? (mass.dom_to_intl || mass.international) : (mass.intl_to_dom || mass.domestic);
+      } else {
+        const ap = state.airports && state.airports[dest];
+        const isDomestic = ap && ap.is_domestic;
+        reqTAT = isDomestic ? mass.domestic : mass.international;
+      }
     }
 
     const el = document.createElement("div");
@@ -742,12 +751,15 @@ class GanttChart {
     const showBT    = width >= 120;
     const showFN    = width >= 70 && sector.flight_number;
 
-    el.innerHTML = `
-      ${showRoute ? `<span class="sector-route">${sector.origin}→${sector.destination}</span>` : ""}
-      ${showTime  ? `<span class="sector-time">${depDisp}–${arrDisp}</span>` : ""}
-      ${showBT    ? `<span class="sector-bt">${btStr}</span>` : ""}
-      ${showFN    ? `<span class="sector-fn">${sector.flight_number}</span>` : ""}
-    `;
+    // 2-column layout: left = route/time/BT (3 lines), right = flight number
+    const leftParts = [];
+    if (showRoute) leftParts.push(`<span class="sector-route">${sector.origin}→${sector.destination}</span>`);
+    if (showTime)  leftParts.push(`<span class="sector-time">${depDisp}–${arrDisp}</span>`);
+    if (showBT)    leftParts.push(`<span class="sector-bt">${btStr}</span>`);
+
+    const rightPart = showFN ? `<div class="sector-col-right"><span class="sector-fn">${sector.flight_number}</span></div>` : "";
+
+    el.innerHTML = `<div class="sector-col-left">${leftParts.join("")}</div>${rightPart}`;
 
     // Rich tooltip with both UTC and LCT per airport
     const depAp = this._airports[sector.origin];
@@ -928,8 +940,12 @@ class GanttChart {
       newDepMin = Math.max(0, Math.min(MINUTES_TOTAL() - btMin, newDepMin));
 
       const newArrMin = newDepMin + btMin;
+      const newDayOff = Math.floor(newDepMin / 1440);
       const newDepUtc = minToTime(newDepMin);
       const newArrUtc = minToTime(newArrMin);
+
+      // Compute new flight_date if day offset changed
+      const newFlightDate = this._getDayDate(newDayOff);
 
       // Check overlap with other sectors on the same row
       const overlap = this._checkTimeDragOverlap(sector, newDepMin, newArrMin);
@@ -945,13 +961,14 @@ class GanttChart {
       this._timeDrag._currentDepUtc = newDepUtc;
       this._timeDrag._currentArrUtc = newArrUtc;
       this._timeDrag._snappedDelta  = snappedDelta;
+      this._timeDrag._newFlightDate = newFlightDate;
 
       if (Math.abs(snappedDelta) > 0) this._timeDragOccurred = true;
     });
 
     document.addEventListener("mouseup", async e => {
       if (!this._timeDrag) return;
-      const { sector, el, _currentDepUtc, _currentArrUtc, activated, _snappedDelta } = this._timeDrag;
+      const { sector, el, _currentDepUtc, _currentArrUtc, activated, _snappedDelta, _newFlightDate } = this._timeDrag;
 
       el.classList.remove("time-dragging");
       el.classList.remove("overlap-blocked");
@@ -975,7 +992,7 @@ class GanttChart {
       }
 
       // Only save if drag was activated and position actually moved
-      if (activated && _currentDepUtc && _currentDepUtc !== sector.dep_utc && this.onTimeChange) {
+      if (activated && _currentDepUtc && (_currentDepUtc !== sector.dep_utc || _newFlightDate !== sector.flight_date) && this.onTimeChange) {
         // Build list of sector IDs to shift: if dragged sector is in multi-select,
         // shift all selected; otherwise just the one sector.
         const idsToShift = this._selectedSectors.has(sector.id)
@@ -984,10 +1001,9 @@ class GanttChart {
 
         // Fire onTimeChange for each; pass the delta minutes alongside so app.js can compute per-sector times
         if (idsToShift.length === 1) {
-          await this.onTimeChange(sector.id, _currentDepUtc, _currentArrUtc);
+          await this.onTimeChange(sector.id, _currentDepUtc, _currentArrUtc, _snappedDelta, _newFlightDate);
         } else {
           // For multi-select time shift, call onTimeChange with the delta
-          // We pass an array signature: onTimeChange(ids, deltaMin)
           await this.onTimeChange(idsToShift, null, null, _snappedDelta);
         }
       }

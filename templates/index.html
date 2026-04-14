@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PikA - Pickleball Airways</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=37" />
+  <link rel="stylesheet" href="/static/css/style.css?v=41" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
 </head>
 <body>
@@ -220,8 +220,8 @@
       </div>
       <div class="form-row">
         <div class="form-group">
-          <label>Block time (phút)</label>
-          <input type="number" id="sectorBlockTime" min="1" max="900" placeholder="Auto" />
+          <label>Block time (HH:MM)</label>
+          <input type="text" id="sectorBlockTime" placeholder="Auto" maxlength="5" class="time-input-24h" />
         </div>
         <div class="form-group">
           <label>Số hiệu chuyến</label>
@@ -399,6 +399,12 @@
             <label>Quốc tế:
               <input type="text" id="massTATIntl" value="01:00" placeholder="HH:MM" maxlength="5" class="time-input-24h" />
             </label>
+            <label>Nội địa→Quốc tế:
+              <input type="text" id="massTATDomToIntl" value="01:00" placeholder="HH:MM" maxlength="5" class="time-input-24h" />
+            </label>
+            <label>Quốc tế→Nội địa:
+              <input type="text" id="massTATIntlToDom" value="01:00" placeholder="HH:MM" maxlength="5" class="time-input-24h" />
+            </label>
             <button class="btn btn-primary btn-sm admin-only" id="btnSaveMassTAT">Lưu mặc định</button>
           </div>
         </div>
@@ -407,6 +413,7 @@
           <button class="btn btn-secondary btn-sm" id="btnExportTAT"><i class="fas fa-file-excel"></i> Xuất Excel</button>
           <button class="btn btn-secondary btn-sm admin-only" id="btnImportTAT"><i class="fas fa-file-upload"></i> Nhập Excel</button>
           <input type="file" id="tatFileInput" accept=".xlsx,.xls" style="display:none" />
+          <input type="text" class="table-search" id="searchTAT" placeholder="Tìm kiếm..." />
         </div>
         <table class="data-table" id="tatTable">
           <thead><tr><th>Sân bay</th><th>Nội địa/Quốc tế</th><th>TAT tối thiểu</th><th class="admin-only"></th></tr></thead>
@@ -421,9 +428,10 @@
           <button class="btn btn-secondary btn-sm" id="btnExportBT"><i class="fas fa-file-excel"></i> Xuất Excel</button>
           <button class="btn btn-secondary btn-sm admin-only" id="btnImportBT"><i class="fas fa-file-upload"></i> Nhập Excel</button>
           <input type="file" id="btFileInput" accept=".xlsx,.xls" style="display:none" />
+          <input type="text" class="table-search" id="searchBT" placeholder="Tìm kiếm..." />
         </div>
         <table class="data-table" id="btTable">
-          <thead><tr><th>Điểm đi</th><th>Điểm đến</th><th>Block time</th><th>Thập phân</th><th>ATS</th><th class="admin-only"></th></tr></thead>
+          <thead><tr><th>Điểm đi</th><th>Điểm đến</th><th>Block time</th><th>Thập phân</th><th>ATS</th><th>Distance(Km)</th><th class="admin-only"></th></tr></thead>
           <tbody id="btTableBody"></tbody>
         </table>
       </div>
@@ -432,6 +440,7 @@
       <div class="tab-content" id="tabAirports">
         <div class="table-toolbar">
           <button class="btn btn-success btn-sm admin-only" id="btnAddAirport"><i class="fas fa-plus"></i> Thêm</button>
+          <input type="text" class="table-search" id="searchAirport" placeholder="Tìm kiếm..." />
         </div>
         <table class="data-table" id="airportTable">
           <thead><tr><th>Mã (IATA)</th><th>Tên sân bay</th><th>Múi giờ (UTC+)</th><th>Curfew</th><th>Loại</th><th class="admin-only"></th></tr></thead>
@@ -447,6 +456,7 @@
           <button class="btn btn-secondary btn-sm admin-only" id="btnImportRegExcel"><i class="fas fa-file-upload"></i> Nhập Excel</button>
           <input type="file" id="regFileInput" accept=".xlsx,.xls" style="display:none" />
           <button class="btn btn-secondary btn-sm" id="btnExportRegCsv"><i class="fas fa-file-csv"></i> Xuất CSV</button>
+          <input type="text" class="table-search" id="searchReg" placeholder="Tìm kiếm..." />
         </div>
         <table class="data-table" id="regTable">
           <thead><tr><th>Số đăng bạ</th><th>Mẫu máy bay</th><th>Số ghế</th><th>D/W</th><th>MTOW (Tấn)</th><th class="admin-only"></th></tr></thead>
@@ -516,6 +526,14 @@
           <select id="expDisplay">
             <option value="flat">Danh sách phẳng</option>
             <option value="grouped">Gộp theo đường bay</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Nội địa/Quốc tế</label>
+          <select id="expDomIntl">
+            <option value="all">Tất cả</option>
+            <option value="domestic">Nội địa</option>
+            <option value="international">Quốc tế</option>
           </select>
         </div>
       </div>
@@ -807,6 +825,10 @@
         <label>ATS</label>
         <input type="text" id="btATS" placeholder="W1, A1..." maxlength="100" />
       </div>
+      <div class="form-group">
+        <label>Khoảng cách (km)</label>
+        <input type="number" id="btDistKm" placeholder="0" min="0" max="99999" />
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" data-close="btFormModal">Huỷ</button>
@@ -942,13 +964,19 @@
 <!-- Footer -->
 <footer class="app-footer">
   <div class="footer-inner">
-    <div class="footer-brand">
-      <i class="fas fa-shield-alt"></i>
-      <span>Thuộc sở hữu <strong>NVH</strong></span>
-    </div>
-    <div class="footer-links">
-      <a href="mailto:mikehvnguyen@gmail.com"><i class="fas fa-envelope"></i> mikehvnguyen@gmail.com</a>
-      <a href="tel:0909301994"><i class="fas fa-phone"></i> 0909 301 994</a>
+    <div class="footer-info-wrapper">
+      <button class="footer-info-btn" id="btnFooterInfo" title="Thông tin nhóm phát triển">
+        <i class="fas fa-info-circle"></i>
+      </button>
+      <div class="footer-info-popup hidden" id="footerInfoPopup">
+        <div class="footer-info-title">Nhóm phát triển</div>
+        <ul class="footer-info-list">
+          <li><i class="fas fa-user"></i> Nguyễn Việt Hoàng</li>
+          <li><i class="fas fa-user"></i> Nguyễn Trần Thuận Hoàng</li>
+          <li><i class="fas fa-user"></i> Nguyễn Trường Trung</li>
+          <li><i class="fas fa-user"></i> Quân Ngô Hồng <span class="footer-alias">(BabyCoder)</span></li>
+        </ul>
+      </div>
     </div>
   </div>
 </footer>
@@ -1122,9 +1150,9 @@
 </div>
 
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-<script src="/static/js/api.js?v=37"></script>
-<script src="/static/js/history.js?v=37"></script>
-<script src="/static/js/gantt.js?v=37"></script>
-<script src="/static/js/app.js?v=37"></script>
+<script src="/static/js/api.js?v=41"></script>
+<script src="/static/js/history.js?v=41"></script>
+<script src="/static/js/gantt.js?v=41"></script>
+<script src="/static/js/app.js?v=41"></script>
 </body>
 </html>

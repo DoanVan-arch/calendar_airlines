@@ -26,8 +26,14 @@ def seed_defaults():
             airports_file = os.path.join(BASE_DIR, "data", "airports.json")
             with open(airports_file, encoding="utf-8") as f:
                 airports_data = json.load(f)
+            # Known international airport codes
+            intl_set = {"SZX","PEK","HKG","SIN","BKK","KUL","NRT","ICN","CDG","LHR","DXB"}
             for ap in airports_data:
-                db.add(Airport(code=ap["code"], name=ap["name"], timezone_offset=ap["timezone_offset"]))
+                db.add(Airport(
+                    code=ap["code"], name=ap["name"],
+                    timezone_offset=ap["timezone_offset"],
+                    is_domestic=ap["code"] not in intl_set,
+                ))
             db.commit()
 
         # Default block-time rules (domestic VN + a few international)
@@ -312,6 +318,31 @@ def _migrate_db():
             pass
         try:
             conn.execute(text("ALTER TABLE airports ADD COLUMN curfew_close VARCHAR(5)"))
+            conn.commit()
+        except Exception:
+            pass
+
+        # Add distance_km column to block_time_rules table
+        try:
+            conn.execute(text("ALTER TABLE block_time_rules ADD COLUMN distance_km INTEGER"))
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+
+        # Add is_domestic column to airports table
+        try:
+            conn.execute(text("ALTER TABLE airports ADD COLUMN is_domestic BOOLEAN DEFAULT 1"))
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+        # Set international airports (known non-VN airports) to is_domestic=0
+        intl_codes = ("SZX","PEK","HKG","SIN","BKK","KUL","NRT","ICN","CDG","LHR","DXB")
+        for code in intl_codes:
+            try:
+                conn.execute(text("UPDATE airports SET is_domestic = 0 WHERE code = :c AND is_domestic = 1"), {"c": code})
+            except Exception:
+                pass
+        try:
             conn.commit()
         except Exception:
             pass
