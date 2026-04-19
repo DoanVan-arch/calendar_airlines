@@ -426,6 +426,53 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
   border-right: 2px solid var(--accent);
   white-space: nowrap;
 }
+/* Bọc bảng trong một div có chiều cao cố định */
+.table-wrapper {
+  max-height: 400px; /* hoặc chiều cao bạn muốn */
+  overflow-y: auto;
+}
+#btTable thead tr th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+ /* background-color: #fff; /* Quan trọng! Cần màu nền để không bị trong suốt */
+}
+#airportTable thead tr th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+ /* background-color: #fff; /* Quan trọng! Cần màu nền để không bị trong suốt */
+}
+#regTable thead tr th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+ /* background-color: #fff; /* Quan trọng! Cần màu nền để không bị trong suốt */
+}
+#userTable thead tr th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+ /* background-color: #fff; /* Quan trọng! Cần màu nền để không bị trong suốt */
+}
+#seasonTable thead tr th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+ /* background-color: #fff; /* Quan trọng! Cần màu nền để không bị trong suốt */
+}
+#auditTable thead tr th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+ /* background-color: #fff; /* Quan trọng! Cần màu nền để không bị trong suốt */
+}
+#tatTable thead tr th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+ /* background-color: #fff; /* Quan trọng! Cần màu nền để không bị trong suốt */
+}
 .ruler-tz-badge-left {
   /* alias kept for JS class name compatibility */
   border-bottom: 1px solid var(--border);

@@ -311,10 +311,12 @@
       </div>
       <button class="btn btn-secondary" id="btnChainPreview"><i class="fas fa-eye"></i> Xem trước</button>
       <div id="chainPreviewBox" class="hidden" style="margin-top:12px;">
+         <div class="table-wrapper">
         <table class="data-table" style="font-size:12px;">
           <thead><tr><th>#</th><th>Chặng</th><th>Chuyến</th><th>Dep (UTC)</th><th>Arr (UTC)</th><th>Block</th><th>TAT</th></tr></thead>
           <tbody id="chainPreviewBody"></tbody>
         </table>
+      </div>
         <div id="chainPreviewError" class="inline-warning hidden" style="margin-top:8px;"></div>
       </div>
     </div>
@@ -415,10 +417,19 @@
           <input type="file" id="tatFileInput" accept=".xlsx,.xls" style="display:none" />
           <input type="text" class="table-search" id="searchTAT" placeholder="Tìm kiếm..." />
         </div>
-        <table class="data-table" id="tatTable">
-          <thead><tr><th>Sân bay</th><th>Nội địa/Quốc tế</th><th>TAT tối thiểu</th><th class="admin-only"></th></tr></thead>
-          <tbody id="tatTableBody"></tbody>
-        </table>
+       <div class="table-wrapper">
+  <table class="data-table" id="tatTable">
+    <thead>
+      <tr>
+        <th>Sân bay</th>
+        <th>Nội địa/Quốc tế</th>
+        <th>TAT tối thiểu</th>
+        <th class="admin-only"></th>
+      </tr>
+    </thead>
+    <tbody id="tatTableBody"></tbody>
+  </table>
+</div>
       </div>
 
       <!-- Block time tab -->
@@ -430,10 +441,12 @@
           <input type="file" id="btFileInput" accept=".xlsx,.xls" style="display:none" />
           <input type="text" class="table-search" id="searchBT" placeholder="Tìm kiếm..." />
         </div>
+         <div class="table-wrapper">
         <table class="data-table" id="btTable">
           <thead><tr><th>Điểm đi</th><th>Điểm đến</th><th>Block time</th><th>Thập phân</th><th>ATS</th><th>Distance(Km)</th><th class="admin-only"></th></tr></thead>
           <tbody id="btTableBody"></tbody>
         </table>
+      </div>
       </div>
 
       <!-- Airports tab (merged from separate modal) -->
@@ -442,10 +455,12 @@
           <button class="btn btn-success btn-sm admin-only" id="btnAddAirport"><i class="fas fa-plus"></i> Thêm</button>
           <input type="text" class="table-search" id="searchAirport" placeholder="Tìm kiếm..." />
         </div>
+         <div class="table-wrapper">
         <table class="data-table" id="airportTable">
           <thead><tr><th>Mã (IATA)</th><th>Tên sân bay</th><th>Múi giờ (UTC+)</th><th>Curfew</th><th>Loại</th><th class="admin-only"></th></tr></thead>
           <tbody id="airportTableBody"></tbody>
         </table>
+      </div>
       </div>
 
       <!-- Registration tab -->
@@ -458,10 +473,12 @@
           <button class="btn btn-secondary btn-sm" id="btnExportRegCsv"><i class="fas fa-file-csv"></i> Xuất CSV</button>
           <input type="text" class="table-search" id="searchReg" placeholder="Tìm kiếm..." />
         </div>
+         <div class="table-wrapper">
         <table class="data-table" id="regTable">
           <thead><tr><th>Số đăng bạ</th><th>Mẫu máy bay</th><th>Số ghế</th><th>D/W</th><th>MTOW (Tấn)</th><th class="admin-only"></th></tr></thead>
           <tbody id="regTableBody"></tbody>
         </table>
+      </div>
       </div>
 
       <!-- Users tab (admin only) -->
@@ -469,10 +486,12 @@
         <div class="table-toolbar">
           <button class="btn btn-success btn-sm" id="btnAddUser"><i class="fas fa-plus"></i> Thêm tài khoản</button>
         </div>
+         <div class="table-wrapper">
         <table class="data-table" id="userTable">
           <thead><tr><th>Tên đăng nhập</th><th>Tên hiển thị</th><th>Quyền</th><th></th></tr></thead>
           <tbody id="userTableBody"></tbody>
         </table>
+      </div>
       </div>
 
       <!-- Seasons tab (admin only) -->
@@ -481,10 +500,12 @@
           <button class="btn btn-success btn-sm" id="btnAddSeason"><i class="fas fa-plus"></i> Thêm mùa</button>
           <button class="btn btn-secondary btn-sm" id="btnLoadDefaultSeasons"><i class="fas fa-calendar-alt"></i> Tải mùa IATA</button>
         </div>
+         <div class="table-wrapper">
         <table class="data-table" id="seasonTable">
           <thead><tr><th>Tên mùa</th><th>Từ ngày</th><th>Đến ngày</th><th>Loại</th><th></th></tr></thead>
           <tbody id="seasonTableBody"></tbody>
         </table>
+      </div>
       </div>
     </div>
   </div>
@@ -610,10 +631,12 @@
         <button class="btn btn-secondary btn-sm" id="btnRefreshAudit"><i class="fas fa-sync-alt"></i> Tải lại</button>
       </div>
       <div style="overflow-x:auto;max-height:480px;overflow-y:auto;">
+         <div class="table-wrapper">
         <table class="data-table" id="auditTable">
           <thead><tr><th>Thời gian</th><th>Người dùng</th><th>Hành động</th><th>Đối tượng</th><th>Chi tiết</th></tr></thead>
           <tbody id="auditTableBody"></tbody>
         </table>
+      </div>
       </div>
     </div>
   </div>
