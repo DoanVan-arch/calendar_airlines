@@ -97,5 +97,8 @@ const API = (() => {
     exportReport: (p)     => req("POST", "/api/export/report", p),
     exportSchedule: ()    => req("GET",  "/api/export/schedule"),
     importSchedule: (d)   => req("POST", "/api/export/import", d),
+    exportxlsxSchedule: ()    => req("GET",  "/api/export/schedulexlsx"),
+    importxlsxSchedule: (d)   => req("POST", "/api/export/importxlsx", d),
+    
   };
 })();

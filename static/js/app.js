@@ -1,4 +1,3 @@
-/* app.js – Main application controller */
 
 // ─── State ───────────────────────────────────────────────────────────────────
 const state = {
@@ -110,6 +109,19 @@ function downloadJSON(data, filename) {
   a.href = url; a.download = filename; a.click();
   URL.revokeObjectURL(url);
 }
+function downloadXLSX(data, filename = "schedule.xlsx") {
+  // data = { sheetName: [ {col1: val, col2: val}, ... ], ... }
+  const wb = XLSX.utils.book_new();
+
+  for (const [sheetName, rows] of Object.entries(data)) {
+    const ws = XLSX.utils.json_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  }
+
+  XLSX.writeFile(wb, filename);
+}
+
+// Ví dụ gọi:
 
 function downloadExcel(data, filename) {
   if (typeof XLSX === "undefined") { alert("Thư viện XLSX chưa tải xong."); return; }
@@ -2902,29 +2914,172 @@ async function saveScheduleFile() {
     alert("Lỗi xuất lịch: " + e.message);
   }
 }
+async function saveScheduleXLSXFile() {
+  try {
+    const data = await API.exportSchedule();
+    downloadXLSX(data, `schedule_${state.currentDate}.xlsx`);
+  } catch (e) {
+    alert("Lỗi xuất lịch: " + e.message);
+  }
+}
+// ─── Import / Export file ─────────────────────────────────────────────────────
 
-function openImportFile() {
-  doc("importFileInput").click();
+/** Mở modal chọn định dạng Export */
+function openExportFile() {
+  _openFormatPicker("export");
 }
 
-async function handleImportFile(e) {
+/** Mở modal chọn định dạng Import */
+function openImportFile() {
+  _openFormatPicker("import");
+}
+
+/**
+ * Hiển thị modal chọn định dạng (Excel / JSON)
+ * @param {"import"|"export"} mode
+ */
+function _openFormatPicker(mode) {
+  const titleEl  = doc("formatPickerTitle");
+  const descEl   = doc("formatPickerDesc");
+  const excelBtn = doc("formatPickerExcel");
+  const jsonBtn  = doc("formatPickerJSON");
+
+  // Clone buttons để xoá event listener cũ
+  const newExcel = excelBtn.cloneNode(true);
+  const newJSON  = jsonBtn.cloneNode(true);
+  excelBtn.parentNode.replaceChild(newExcel, excelBtn);
+  jsonBtn.parentNode.replaceChild(newJSON, jsonBtn);
+
+  if (mode === "export") {
+    titleEl.innerHTML = '<i class="fas fa-file-export"></i> Xuất lịch bay';
+    descEl.textContent = "Chọn định dạng file để xuất toàn bộ dữ liệu lịch bay:";
+
+    newExcel.addEventListener("click", async () => {
+      closeModal("formatPickerOverlay");
+      await _exportScheduleExcel();
+    });
+    newJSON.addEventListener("click", async () => {
+      closeModal("formatPickerOverlay");
+      await _exportScheduleJSON();
+    });
+  } else {
+    titleEl.innerHTML = '<i class="fas fa-file-import"></i> Nhập lịch bay';
+    descEl.textContent = "Chọn định dạng file để nhập dữ liệu lịch bay:";
+
+    newExcel.addEventListener("click", () => {
+      closeModal("formatPickerOverlay");
+      doc("importFileInputXLSX").click();
+    });
+    newJSON.addEventListener("click", () => {
+      closeModal("formatPickerOverlay");
+      doc("importFileInputJSON").click();
+    });
+  }
+
+  doc("formatPickerOverlay").classList.remove("hidden");
+}
+
+// ── Export handlers ───────────────────────────────────────────────────────────
+
+/** Export → Excel (fetch blob từ backend) */
+async function _exportScheduleExcel() {
+  try {
+    showToast("Đang xuất file Excel...", "info");
+    const res = await fetch("/api/export/schedulexlsx");
+    if (!res.ok) throw new Error(await res.text());
+    const blob = await res.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href     = url;
+    a.download = `schedule_${state.currentDate}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast("Xuất Excel thành công!", "success");
+  } catch (e) {
+    alert("Lỗi xuất Excel: " + e.message);
+  }
+}
+
+/** Export → JSON (fetch data từ backend rồi download) */
+async function _exportScheduleJSON() {
+  try {
+    showToast("Đang xuất file JSON...", "info");
+    const data = await API.exportSchedule();
+    downloadJSON(data, `schedule_${state.currentDate}.json`);
+    showToast("Xuất JSON thành công!", "success");
+  } catch (e) {
+    alert("Lỗi xuất JSON: " + e.message);
+  }
+}
+
+// ── Import handlers ───────────────────────────────────────────────────────────
+
+/** Import từ file Excel (.xlsx) */
+async function handleImportFileXLSX(e) {
   const file = e.target.files[0];
   if (!file) return;
+
+  const replace = confirm(
+    "Thay thế toàn bộ dữ liệu hiện tại?\n(Chọn Cancel để gộp dữ liệu)"
+  );
+
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("replace_all", replace ? "true" : "false");
+
+  try {
+    showToast("Đang nhập dữ liệu Excel...", "info");
+    const res = await fetch("/api/export/importxlsx", {
+      method: "POST",
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Import thất bại");
+    }
+    const result = await res.json();
+    history.clear();
+    await loadReferenceData();
+    await refreshView();
+    showToast("Import Excel thành công!", "success");
+    alert(`Import thành công!\n${result.message || ""}`);
+  } catch (err) {
+    alert("Lỗi import Excel: " + err.message);
+  }
+  e.target.value = "";
+}
+
+/** Import từ file JSON */
+async function handleImportFileJSON(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+
   try {
     const text = await file.text();
     const data = JSON.parse(text);
-    const replace = confirm("Thay thế toàn bộ dữ liệu hiện tại?\n(Chọn Cancel để gộp dữ liệu)");
+    const replace = confirm(
+      "Thay thế toàn bộ dữ liệu hiện tại?\n(Chọn Cancel để gộp dữ liệu)"
+    );
     data.replace_all = replace;
+
+    showToast("Đang nhập dữ liệu JSON...", "info");
     await API.importSchedule(data);
     history.clear();
     await loadReferenceData();
     await refreshView();
-    alert(`Import thành công!\n${data.sectors?.length || 0} chặng bay, ${data.aircraft?.length || 0} tàu bay`);
-  } catch (e) {
-    alert("Lỗi import: " + e.message);
+    showToast("Import JSON thành công!", "success");
+    alert(
+      `Import thành công!\n${data.sectors?.length || 0} chặng bay, ${data.aircraft?.length || 0} tàu bay`
+    );
+  } catch (err) {
+    alert("Lỗi import JSON: " + err.message);
   }
   e.target.value = "";
 }
+
+
+
+
 
 // ─── Modal helpers ────────────────────────────────────────────────────────────
 function closeModal(overlayId) {
@@ -3450,7 +3605,10 @@ async function confirmPaste() {
   }
 
   // Compute the max day offset among copied sectors
-  const maxOffset = sectors.reduce((mx, s) => Math.max(mx, s._dayOffset || 0), 0);
+  const ignoreOffset = (dateMode === "single");
+  const maxOffset = ignoreOffset
+    ? 0
+    : sectors.reduce((mx, s) => Math.max(mx, s._dayOffset || 0), 0);
 
   const created  = [];
   const failed   = [];
@@ -3478,7 +3636,7 @@ async function confirmPaste() {
     }
 
     for (const s of sectors) {
-      const dayOffset = s._dayOffset || 0;
+      const dayOffset  = ignoreOffset ? 0 : (s._dayOffset || 0);
       const sectorDate = _addDaysStr(targetDate, dayOffset);
       const payload = {
         aircraft_id : targetAcId,
@@ -3494,7 +3652,7 @@ async function confirmPaste() {
         const result = await API.createSector(payload);
         created.push(result);
       } catch (e) {
-        failed.push(`${sectorDate} ${s.origin}→${s.destination}: ${e.message}`);
+        failed.push(`${dayOffset}|| ${JSON.stringify(payload)}|| ${sectorDate} ${s.origin}→${s.destination}: ${e.message}`);
       }
     }
   }
@@ -3806,8 +3964,11 @@ function bindUI() {
   doc("btnRules").addEventListener("click",       openRulesModal);
   doc("btnReport").addEventListener("click",      openReportModal);
   doc("btnExport").addEventListener("click",      openExportModal);
-  doc("btnSaveFile").addEventListener("click",    saveScheduleFile);
-  doc("btnImportFile").addEventListener("click",  openImportFile);
+  doc("btnSaveFile").addEventListener("click",   openExportFile);
+  doc("btnImportFile").addEventListener("click", openImportFile);
+  doc("importFileInputXLSX").addEventListener("change", handleImportFileXLSX);
+  doc("importFileInputJSON").addEventListener("change",  handleImportFileJSON);
+
   doc("btnAuditLog").addEventListener("click",    openAuditModal);
   if (doc("btnAddMaintenance")) {
     doc("btnAddMaintenance").addEventListener("click", () => openMaintenanceModal());
@@ -4025,8 +4186,7 @@ function bindUI() {
     else alert("Hãy xem trước rồi tải.");
   });
 
-  // File import
-  doc("importFileInput").addEventListener("change", handleImportFile);
+
 
   // Audit log modal
   const _btnRefreshAudit = doc("btnRefreshAudit");

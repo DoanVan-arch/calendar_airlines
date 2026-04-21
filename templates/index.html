@@ -1178,5 +1178,35 @@
 <script src="/static/js/history.js?v=41"></script>
 <script src="/static/js/gantt.js?v=41"></script>
 <script src="/static/js/app.js?v=41"></script>
+<script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+
+<!-- ── Format Picker Modal (Import / Export) ─────────────────────────── -->
+<div class="modal-overlay hidden" id="formatPickerOverlay">
+  <div class="modal" style="max-width:340px;">
+    <div class="modal-header">
+      <h3 id="formatPickerTitle"><i class="fas fa-file-export"></i> Chọn định dạng</h3>
+      <button class="btn-icon" data-close="formatPickerOverlay"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body" style="padding:24px 20px;">
+      <p id="formatPickerDesc" style="color:var(--text-secondary);margin-bottom:20px;font-size:13px;"></p>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <button id="formatPickerExcel" class="btn btn-primary" style="justify-content:center;gap:10px;padding:12px;">
+          <i class="fas fa-file-excel" style="color:#22c55e;font-size:16px;"></i>
+          <span>Excel <code style="font-size:11px;opacity:.7;">.xlsx</code></span>
+        </button>
+        <button id="formatPickerJSON" class="btn btn-secondary" style="justify-content:center;gap:10px;padding:12px;">
+          <i class="fas fa-file-code" style="color:#f59e0b;font-size:16px;"></i>
+          <span>JSON <code style="font-size:11px;opacity:.7;">.json</code></span>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Hidden file inputs -->
+<input type="file" id="importFileInput"     accept=".xlsx,.xls,.json" style="display:none">
+<input type="file" id="importFileInputXLSX" accept=".xlsx,.xls"       style="display:none">
+<input type="file" id="importFileInputJSON" accept=".json"             style="display:none">
+
 </body>
 </html>

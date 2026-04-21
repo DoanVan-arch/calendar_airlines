@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, Depends, HTTPException, Body, UploadFile, File
 from fastapi.responses import JSONResponse
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List
 from datetime import datetime, timedelta
@@ -13,6 +14,13 @@ from ..models import (FlightSector, Aircraft, Airport, BlockTimeRule, TATRule,
 from ..schemas import TimetableExportParams, ReportParams, ImportPayload
 
 router = APIRouter()
+import io
+
+import openpyxl
+
+
+
+
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
@@ -734,4 +742,368 @@ def import_schedule(payload: dict = Body(...), db: Session = Depends(get_db)):
 
     cnt_sectors = len(payload.get("sectors", []))
     cnt_aircraft = len(payload.get("aircraft", []))
+    return {"ok": True, "message": f"Import successful: {cnt_aircraft} aircraft, {cnt_sectors} sectors"}
+#-- help excel----
+def _write_sheet(wb: openpyxl.Workbook, title: str, headers: list[str], rows: list[dict]):
+    ws = wb.create_sheet(title=title)
+    ws.append(headers)
+    for row in rows:
+        ws.append([row.get(h) for h in headers])
+
+
+def _read_sheet(wb: openpyxl.Workbook, title: str) -> list[dict]:
+    if title not in wb.sheetnames:
+        return []
+    ws = wb[title]
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        return []
+    headers = [str(h) if h is not None else "" for h in rows[0]]
+    result = []
+    for row in rows[1:]:
+        if all(v is None for v in row):
+            continue  # skip empty rows
+        result.append(dict(zip(headers, row)))
+    return result
+
+
+# ── Export ─────────────────────────────────────────────────────────────────────
+
+@router.get("/schedulexlsx")
+def export_schedule(db: Session = Depends(get_db)):
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)  # remove default sheet
+
+    # Airports
+    airports = db.query(Airport).all()
+    _write_sheet(wb, "airports",
+                 ["code", "name", "timezone_offset", "curfew_open", "curfew_close"],
+                 [{"code": a.code, "name": a.name, "timezone_offset": a.timezone_offset,
+                   "curfew_open": a.curfew_open, "curfew_close": a.curfew_close}
+                  for a in airports])
+
+    # Registrations
+    registrations = db.query(Registration).all()
+    _write_sheet(wb, "registrations",
+                 ["id", "registration", "aircraft_model", "seats", "dw_type", "mtow"],
+                 [{"id": r.id, "registration": r.registration,
+                   "aircraft_model": r.aircraft_model, "seats": r.seats,
+                   "dw_type": r.dw_type, "mtow": r.mtow}
+                  for r in registrations])
+
+    # Aircraft
+    aircraft = db.query(Aircraft).order_by(Aircraft.line_order).all()
+    _write_sheet(wb, "aircraft",
+                 ["id", "registration", "name", "ac_type", "line_order", "color", "registration_id"],
+                 [{"id": a.id, "registration": a.registration, "name": a.name,
+                   "ac_type": a.ac_type, "line_order": a.line_order,
+                   "color": a.color, "registration_id": a.registration_id}
+                  for a in aircraft])
+
+    # Sectors
+    sectors = db.query(FlightSector).all()
+    _write_sheet(wb, "sectors",
+                 ["id", "aircraft_id", "flight_date", "origin", "destination",
+                  "dep_utc", "arr_utc", "flight_number", "status", "sequence", "color"],
+                 [{"id": s.id, "aircraft_id": s.aircraft_id, "flight_date": s.flight_date,
+                   "origin": s.origin, "destination": s.destination,
+                   "dep_utc": s.dep_utc, "arr_utc": s.arr_utc,
+                   "flight_number": s.flight_number, "status": s.status,
+                   "sequence": s.sequence, "color": s.color}
+                  for s in sectors])
+
+    # Block-time rules
+    bt_rules = db.query(BlockTimeRule).all()
+    _write_sheet(wb, "block_time_rules",
+                 ["origin", "destination", "block_time_minutes", "ats"],
+                 [{"origin": r.origin, "destination": r.destination,
+                   "block_time_minutes": r.block_time_minutes, "ats": r.ats}
+                  for r in bt_rules])
+
+    # TAT rules
+    tat_rules = db.query(TATRule).all()
+    _write_sheet(wb, "tat_rules",
+                 ["station", "min_tat_minutes", "is_domestic"],
+                 [{"station": r.station, "min_tat_minutes": r.min_tat_minutes,
+                   "is_domestic": r.is_domestic}
+                  for r in tat_rules])
+
+    # Seasons
+    seasons = db.query(Season).all()
+    _write_sheet(wb, "seasons",
+                 ["name", "season_type", "year", "start_date", "end_date"],
+                 [{"name": s.name, "season_type": s.season_type, "year": s.year,
+                   "start_date": s.start_date, "end_date": s.end_date}
+                  for s in seasons])
+
+    # Maintenance
+    maintenance = db.query(MaintenanceBlock).all()
+    _write_sheet(wb, "maintenance",
+                 ["aircraft_id", "label", "start_date", "end_date", "start_time", "end_time", "color"],
+                 [{"aircraft_id": m.aircraft_id, "label": m.label,
+                   "start_date": m.start_date, "end_date": m.end_date,
+                   "start_time": m.start_time, "end_time": m.end_time,
+                   "color": m.color}
+                  for m in maintenance])
+
+    # Calendar notes
+    calendar_notes = db.query(CalendarNote).all()
+    _write_sheet(wb, "calendar_notes",
+                 ["note_date", "note_end_date", "start_time", "end_time", "content", "color"],
+                 [{"note_date": n.note_date, "note_end_date": n.note_end_date,
+                   "start_time": n.start_time, "end_time": n.end_time,
+                   "content": n.content, "color": n.color}
+                  for n in calendar_notes])
+
+    # Route colors
+    route_colors = db.query(RouteColor).all()
+    _write_sheet(wb, "route_colors",
+                 ["origin", "destination", "color"],
+                 [{"origin": rc.origin, "destination": rc.destination, "color": rc.color}
+                  for rc in route_colors])
+
+    # App settings
+    app_settings = db.query(AppSetting).all()
+    _write_sheet(wb, "app_settings",
+                 ["key", "value"],
+                 [{"key": s.key, "value": s.value} for s in app_settings])
+
+    # Stream file
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    filename = f"schedule_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
+# ── Import ─────────────────────────────────────────────────────────────────────
+
+@router.post("/importxlsx")
+async def import_schedule(
+    file: UploadFile = File(...),
+    replace_all: bool = False,
+    db: Session = Depends(get_db),
+):
+    content = await file.read()
+    wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+
+    if replace_all:
+        db.query(FlightSector).delete()
+        db.query(MaintenanceBlock).delete()
+        db.query(Aircraft).delete()
+        db.query(Registration).delete()
+        db.query(BlockTimeRule).delete()
+        db.query(TATRule).delete()
+        db.query(Season).delete()
+        db.query(CalendarNote).delete()
+        db.query(RouteColor).delete()
+        db.query(AppSetting).delete()
+        db.commit()
+
+    # ── Airports ──────────────────────────────────────────────────────────────
+    for ap in _read_sheet(wb, "airports"):
+        code = str(ap["code"]).upper() if ap.get("code") else None
+        if not code:
+            continue
+        existing = db.query(Airport).filter(Airport.code == code).first()
+        if not existing:
+            db.add(Airport(
+                code=code,
+                name=ap.get("name", ""),
+                timezone_offset=ap.get("timezone_offset", 7.0),
+                curfew_open=ap.get("curfew_open"),
+                curfew_close=ap.get("curfew_close"),
+            ))
+        else:
+            if ap.get("name"):
+                existing.name = ap["name"]
+            if ap.get("timezone_offset") is not None:
+                existing.timezone_offset = ap["timezone_offset"]
+            if ap.get("curfew_open") is not None:
+                existing.curfew_open = ap["curfew_open"]
+            if ap.get("curfew_close") is not None:
+                existing.curfew_close = ap["curfew_close"]
+    db.commit()
+
+    # ── Registrations ─────────────────────────────────────────────────────────
+    old_to_new_reg: dict = {}
+    for reg in _read_sheet(wb, "registrations"):
+        old_id = reg.get("id")
+        reg_str = str(reg["registration"]) if reg.get("registration") else None
+        if not reg_str:
+            continue
+        existing = db.query(Registration).filter(Registration.registration == reg_str).first()
+        if not existing:
+            new_reg = Registration(
+                registration=reg_str,
+                aircraft_model=reg.get("aircraft_model", ""),
+                seats=int(reg["seats"]) if reg.get("seats") is not None else 0,
+                dw_type=reg.get("dw_type"),
+                mtow=reg.get("mtow"),
+            )
+            db.add(new_reg)
+            db.flush()
+            if old_id is not None:
+                old_to_new_reg[int(old_id)] = new_reg.id
+        else:
+            if reg.get("aircraft_model"):
+                existing.aircraft_model = reg["aircraft_model"]
+            if reg.get("seats") is not None:
+                existing.seats = int(reg["seats"])
+            if reg.get("dw_type") is not None:
+                existing.dw_type = reg["dw_type"]
+            if reg.get("mtow") is not None:
+                existing.mtow = reg["mtow"]
+            if old_id is not None:
+                old_to_new_reg[int(old_id)] = existing.id
+    db.commit()
+
+    # ── Aircraft ──────────────────────────────────────────────────────────────
+    old_to_new_ac: dict = {}
+    for ac in _read_sheet(wb, "aircraft"):
+        old_id = ac.get("id")
+        reg_str = str(ac["registration"]) if ac.get("registration") else None
+        if not reg_str:
+            continue
+        old_reg_id = ac.get("registration_id")
+        new_reg_id = old_to_new_reg.get(int(old_reg_id), int(old_reg_id)) if old_reg_id else None
+
+        existing = db.query(Aircraft).filter(Aircraft.registration == reg_str).first()
+        if not existing:
+            new_ac = Aircraft(
+                registration=reg_str,
+                name=ac.get("name"),
+                ac_type=ac.get("ac_type"),
+                line_order=int(ac["line_order"]) if ac.get("line_order") is not None else 0,
+                color=ac.get("color"),
+                registration_id=new_reg_id,
+            )
+            db.add(new_ac)
+            db.flush()
+            if old_id is not None:
+                old_to_new_ac[int(old_id)] = new_ac.id
+        else:
+            if ac.get("name") is not None:
+                existing.name = ac["name"]
+            if ac.get("ac_type") is not None:
+                existing.ac_type = ac["ac_type"]
+            if ac.get("line_order") is not None:
+                existing.line_order = int(ac["line_order"])
+            if ac.get("color") is not None:
+                existing.color = ac["color"]
+            if new_reg_id is not None:
+                existing.registration_id = new_reg_id
+            if old_id is not None:
+                old_to_new_ac[int(old_id)] = existing.id
+    db.commit()
+
+    # ── Sectors ───────────────────────────────────────────────────────────────
+    for s in _read_sheet(wb, "sectors"):
+        old_ac_id = s.get("aircraft_id")
+        ac_id = old_to_new_ac.get(int(old_ac_id), int(old_ac_id)) if old_ac_id else None
+        db.add(FlightSector(
+            aircraft_id=ac_id,
+            flight_date=s["flight_date"],
+            origin=str(s["origin"]).upper(),
+            destination=str(s["destination"]).upper(),
+            dep_utc=s["dep_utc"],
+            arr_utc=s["arr_utc"],
+            flight_number=s.get("flight_number"),
+            status=s.get("status", "active"),
+            sequence=int(s["sequence"]) if s.get("sequence") is not None else 0,
+            color=s.get("color"),
+        ))
+    db.commit()
+
+    # ── Block-time rules ──────────────────────────────────────────────────────
+    for r in _read_sheet(wb, "block_time_rules"):
+        orig = str(r["origin"]).upper()
+        dest = str(r["destination"]).upper()
+        existing = db.query(BlockTimeRule).filter(
+            BlockTimeRule.origin == orig, BlockTimeRule.destination == dest).first()
+        if existing:
+            existing.block_time_minutes = r["block_time_minutes"]
+            if r.get("ats") is not None:
+                existing.ats = r["ats"]
+        else:
+            db.add(BlockTimeRule(origin=orig, destination=dest,
+                                 block_time_minutes=r["block_time_minutes"],
+                                 ats=r.get("ats")))
+
+    # ── TAT rules ─────────────────────────────────────────────────────────────
+    for r in _read_sheet(wb, "tat_rules"):
+        station = str(r["station"]).upper()
+        existing = db.query(TATRule).filter(TATRule.station == station).first()
+        if existing:
+            if r.get("min_tat_minutes") is not None:
+                existing.min_tat_minutes = r["min_tat_minutes"]
+            if r.get("is_domestic") is not None:
+                existing.is_domestic = r["is_domestic"]
+        else:
+            db.add(TATRule(station=station,
+                           min_tat_minutes=r.get("min_tat_minutes", 40),
+                           is_domestic=r.get("is_domestic")))
+
+    # ── Seasons ───────────────────────────────────────────────────────────────
+    for s in _read_sheet(wb, "seasons"):
+        existing = db.query(Season).filter(
+            Season.name == s["name"], Season.year == s["year"]).first()
+        if not existing:
+            db.add(Season(name=s["name"], season_type=s.get("season_type"),
+                          year=s["year"], start_date=s["start_date"],
+                          end_date=s["end_date"]))
+
+    # ── Maintenance ───────────────────────────────────────────────────────────
+    for m in _read_sheet(wb, "maintenance"):
+        old_ac_id = m.get("aircraft_id")
+        ac_id = old_to_new_ac.get(int(old_ac_id), int(old_ac_id)) if old_ac_id else None
+        db.add(MaintenanceBlock(
+            aircraft_id=ac_id,
+            label=m.get("label", "Maintenance"),
+            start_date=m["start_date"],
+            end_date=m["end_date"],
+            start_time=m.get("start_time"),
+            end_time=m.get("end_time"),
+            color=m.get("color", "#f59e0b"),
+        ))
+
+    # ── Calendar notes ────────────────────────────────────────────────────────
+    for n in _read_sheet(wb, "calendar_notes"):
+        db.add(CalendarNote(
+            note_date=n["note_date"],
+            note_end_date=n.get("note_end_date"),
+            start_time=n.get("start_time"),
+            end_time=n.get("end_time"),
+            content=n["content"],
+            color=n.get("color", "#3b82f6"),
+        ))
+
+    # ── Route colors ──────────────────────────────────────────────────────────
+    for rc in _read_sheet(wb, "route_colors"):
+        orig = str(rc["origin"]).upper()
+        dest = str(rc["destination"]).upper()
+        existing = db.query(RouteColor).filter(
+            RouteColor.origin == orig, RouteColor.destination == dest).first()
+        if not existing:
+            db.add(RouteColor(origin=orig, destination=dest, color=rc["color"]))
+        else:
+            existing.color = rc["color"]
+
+    # ── App settings ──────────────────────────────────────────────────────────
+    for s in _read_sheet(wb, "app_settings"):
+        existing = db.query(AppSetting).filter(AppSetting.key == s["key"]).first()
+        if existing:
+            existing.value = s.get("value")
+        else:
+            db.add(AppSetting(key=s["key"], value=s.get("value")))
+
+    db.commit()
+
+    cnt_sectors = len(_read_sheet(wb, "sectors"))
+    cnt_aircraft = len(_read_sheet(wb, "aircraft"))
     return {"ok": True, "message": f"Import successful: {cnt_aircraft} aircraft, {cnt_sectors} sectors"}
