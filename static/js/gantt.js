@@ -616,12 +616,15 @@ class GanttChart {
     } else {
       const mass = state.massTAT || { domestic: 40, international: 60, dom_to_intl: 60, intl_to_dom: 60 };
       // Check for transition TAT (previous leg type ≠ next leg type)
-      const apPrev = state.airports && state.airports[prev.origin];
-      const apNext = state.airports && state.airports[next.destination];
-      const prevDom = apPrev && apPrev.is_domestic;
-      const nextDom = apNext && apNext.is_domestic;
-      if (prevDom !== undefined && nextDom !== undefined && prevDom !== nextDom) {
-        reqTAT = prevDom ? (mass.dom_to_intl || mass.international) : (mass.intl_to_dom || mass.domestic);
+      // A flight is domestic only if BOTH endpoints are domestic
+      const apPrevOrig = state.airports && state.airports[prev.origin];
+      const apPrevDest = state.airports && state.airports[prev.destination];
+      const apNextOrig = state.airports && state.airports[next.origin];
+      const apNextDest = state.airports && state.airports[next.destination];
+      const inboundDom = apPrevOrig && apPrevDest && apPrevOrig.is_domestic && apPrevDest.is_domestic;
+      const outboundDom = apNextOrig && apNextDest && apNextOrig.is_domestic && apNextDest.is_domestic;
+      if (inboundDom !== outboundDom) {
+        reqTAT = inboundDom ? (mass.dom_to_intl || mass.international) : (mass.intl_to_dom || mass.domestic);
       } else {
         const ap = state.airports && state.airports[dest];
         const isDomestic = ap && ap.is_domestic;
@@ -874,6 +877,7 @@ class GanttChart {
       this._selectedSectors.add(sectorId);
       el.classList.add("selected");
     }
+    if (this.onSelectionChange) this.onSelectionChange(this._selectedSectors.size);
   }
 
   _clearSelection() {
@@ -882,6 +886,7 @@ class GanttChart {
       if (el) el.classList.remove("selected");
     }
     this._selectedSectors.clear();
+    if (this.onSelectionChange) this.onSelectionChange(0);
   }
 
   // ── Same-row time drag ──────────────────────────────────────────────────────

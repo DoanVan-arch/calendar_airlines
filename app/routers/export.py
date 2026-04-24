@@ -647,11 +647,24 @@ def import_schedule(payload: dict = Body(...), db: Session = Depends(get_db)):
     for s_data in payload.get("sectors", []):
         old_ac_id = s_data.get("aircraft_id")
         ac_id = old_to_new_ac.get(old_ac_id, old_ac_id)
+        origin = s_data["origin"].upper()
+        dest   = s_data["destination"].upper()
+        # In merge mode, skip duplicates
+        if not replace_all:
+            dup = db.query(FlightSector).filter(
+                FlightSector.aircraft_id == ac_id,
+                FlightSector.flight_date == s_data["flight_date"],
+                FlightSector.origin == origin,
+                FlightSector.destination == dest,
+                FlightSector.dep_utc == s_data["dep_utc"],
+            ).first()
+            if dup:
+                continue
         db.add(FlightSector(
             aircraft_id=ac_id,
             flight_date=s_data["flight_date"],
-            origin=s_data["origin"].upper(),
-            destination=s_data["destination"].upper(),
+            origin=origin,
+            destination=dest,
             dep_utc=s_data["dep_utc"],
             arr_utc=s_data["arr_utc"],
             flight_number=s_data.get("flight_number"),
@@ -1006,11 +1019,24 @@ async def import_schedule(
     for s in _read_sheet(wb, "sectors"):
         old_ac_id = s.get("aircraft_id")
         ac_id = old_to_new_ac.get(int(old_ac_id), int(old_ac_id)) if old_ac_id else None
+        origin = str(s["origin"]).upper()
+        dest   = str(s["destination"]).upper()
+        # In merge mode, skip sectors that already exist to avoid duplicates
+        if not replace_all:
+            dup = db.query(FlightSector).filter(
+                FlightSector.aircraft_id == ac_id,
+                FlightSector.flight_date == s["flight_date"],
+                FlightSector.origin == origin,
+                FlightSector.destination == dest,
+                FlightSector.dep_utc == s["dep_utc"],
+            ).first()
+            if dup:
+                continue
         db.add(FlightSector(
             aircraft_id=ac_id,
             flight_date=s["flight_date"],
-            origin=str(s["origin"]).upper(),
-            destination=str(s["destination"]).upper(),
+            origin=origin,
+            destination=dest,
             dep_utc=s["dep_utc"],
             arr_utc=s["arr_utc"],
             flight_number=s.get("flight_number"),

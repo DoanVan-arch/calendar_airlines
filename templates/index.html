@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PikA - Pickleball Airways</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=41" />
+  <link rel="stylesheet" href="/static/css/style.css?v=43" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
 </head>
 <body>
@@ -41,6 +41,9 @@
       <button class="tz-btn"        id="btnViewWeek"  data-view="week">Tuần</button>
       <button class="tz-btn"        id="btnViewMonth" data-view="month">Tháng</button>
     </div>
+    <a class="btn-demo-link" href="https://calendarairline-demo.up.railway.app/" target="_blank" rel="noopener">
+      <i class="fas fa-external-link-alt"></i> Bản Demo
+    </a>
   </div>
 
   <div class="header-actions">
@@ -1002,6 +1005,10 @@
         </ul>
       </div>
     </div>
+    <div class="footer-selection-info hidden" id="footerSelectionInfo">
+      <i class="fas fa-check-square"></i>
+      <span id="footerSelectionCount">0</span> block đã chọn
+    </div>
   </div>
 </footer>
 
@@ -1174,10 +1181,10 @@
 </div>
 
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-<script src="/static/js/api.js?v=41"></script>
-<script src="/static/js/history.js?v=41"></script>
-<script src="/static/js/gantt.js?v=41"></script>
-<script src="/static/js/app.js?v=41"></script>
+<script src="/static/js/api.js?v=43"></script>
+<script src="/static/js/history.js?v=43"></script>
+<script src="/static/js/gantt.js?v=43"></script>
+<script src="/static/js/app.js?v=43"></script>
 <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
 
 <!-- ── Format Picker Modal (Import / Export) ─────────────────────────── -->

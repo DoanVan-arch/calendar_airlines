@@ -86,6 +86,30 @@ body {
   font-size: 18px;
   opacity: 1;
 }
+#expEnd::-webkit-calendar-picker-indicator {
+  filter: invert(0.6) sepia(1) saturate(5) hue-rotate(185deg);
+  cursor: pointer;
+  font-size: 18px;
+  opacity: 1;
+}
+#rptStart::-webkit-calendar-picker-indicator {
+  filter: invert(0.6) sepia(1) saturate(5) hue-rotate(185deg);
+  cursor: pointer;
+  font-size: 18px;
+  opacity: 1;
+}
+#expStart::-webkit-calendar-picker-indicator {
+  filter: invert(0.6) sepia(1) saturate(5) hue-rotate(185deg);
+  cursor: pointer;
+  font-size: 18px;
+  opacity: 1;
+}
+#rptEnd::-webkit-calendar-picker-indicator {
+  filter: invert(0.6) sepia(1) saturate(5) hue-rotate(185deg);
+  cursor: pointer;
+  font-size: 18px;
+  opacity: 1;
+}
 #currentDate:hover, #currentDate:focus {
   border-color: #79c0ff;
   background: var(--bg-surface2);
@@ -1407,7 +1431,31 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
 .header-view-toggle {
   display: flex;
   align-items: center;
+  gap: 12px;
 }
+
+/* Demo link button in header */
+.btn-demo-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  border: none;
+  border-radius: 6px;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: filter 0.2s, transform 0.1s;
+  box-shadow: 0 2px 8px rgba(245,158,11,0.35);
+}
+.btn-demo-link:hover {
+  filter: brightness(1.12);
+  transform: translateY(-1px);
+}
+.btn-demo-link i { font-size: 11px; }
 
 .view-toggle .tz-btn {
   padding: 4px 14px;
@@ -1914,6 +1962,23 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
   font-style: italic;
   font-size: 11px;
 }
+
+/* Footer selection count badge */
+.footer-selection-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--accent);
+  background: rgba(0,180,216,0.10);
+  border: 1px solid rgba(0,180,216,0.30);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-weight: 500;
+  transition: opacity 0.2s;
+}
+.footer-selection-info.hidden { display: none; }
+.footer-selection-info i { font-size: 11px; }
 
 /* body bottom padding for footer */
 body {

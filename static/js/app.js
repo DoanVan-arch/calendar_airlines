@@ -218,6 +218,16 @@ async function init() {
     onReorder          : handleAircraftReorder,
     onRowDrop          : handleRowDrop,
   });
+  gantt.onSelectionChange = (count) => {
+    const info  = doc("footerSelectionInfo");
+    const countEl = doc("footerSelectionCount");
+    if (count > 0) {
+      countEl.textContent = count;
+      info.classList.remove("hidden");
+    } else {
+      info.classList.add("hidden");
+    }
+  };
 
   history.onchange = (canUndo, canRedo) => {
     document.getElementById("btnUndo").disabled = !canUndo;
@@ -1473,15 +1483,17 @@ function _getTATForStation(station, prevOrigin, nextDest) {
   const mass = state.massTAT || { domestic: 40, international: 60, dom_to_intl: 60, intl_to_dom: 60 };
 
   // 2. Check for transition TAT if we know inbound origin + outbound destination
+  // prevOrigin = origin of inbound leg, station = destination of inbound = origin of outbound, nextDest = destination of outbound
+  // A flight is domestic only if BOTH endpoints are domestic
   if (prevOrigin && nextDest) {
-    const apPrev = state.airports && state.airports[prevOrigin];
-    const apNext = state.airports && state.airports[nextDest];
-    const prevDom = apPrev && apPrev.is_domestic;
-    const nextDom = apNext && apNext.is_domestic;
-    // Only apply transition TAT if leg types differ
-    if (prevDom !== undefined && nextDom !== undefined && prevDom !== nextDom) {
-      if (prevDom && !nextDom) return mass.dom_to_intl || mass.international;
-      if (!prevDom && nextDom) return mass.intl_to_dom || mass.domestic;
+    const apPrevOrig = state.airports && state.airports[prevOrigin];
+    const apStation  = state.airports && state.airports[station];
+    const apNextDest = state.airports && state.airports[nextDest];
+    const inboundDom  = apPrevOrig && apStation && apPrevOrig.is_domestic && apStation.is_domestic;
+    const outboundDom = apStation  && apNextDest && apStation.is_domestic  && apNextDest.is_domestic;
+    if (inboundDom !== outboundDom) {
+      if (inboundDom && !outboundDom) return mass.dom_to_intl || mass.international;
+      if (!inboundDom && outboundDom) return mass.intl_to_dom || mass.domestic;
     }
   }
 
@@ -1791,9 +1803,10 @@ function handleSectorClick(sector) {
 function handleSectorRightClick(sector, x, y) {
   _ctxSector = sector;
   const cm = doc("contextMenu");
-  cm.style.left = x + "px";
-  cm.style.top  = y + "px";
+  // Temporarily show to measure height
   cm.classList.remove("hidden");
+  cm.style.left = "-9999px";
+  cm.style.top  = "-9999px";
 
   doc("cmEdit").classList.remove("hidden");
   if (sector.status === "cancelled") {
@@ -1803,6 +1816,16 @@ function handleSectorRightClick(sector, x, y) {
     doc("cmCancel").classList.remove("hidden");
     doc("cmRestore").classList.add("hidden");
   }
+
+  // Position: prefer below-right, but flip if near edge
+  const cmW = cm.offsetWidth || 170;
+  const cmH = cm.offsetHeight || 160;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const posX = (x + cmW > vw) ? x - cmW : x;
+  const posY = (y + cmH > vh) ? y - cmH : y;
+  cm.style.left = posX + "px";
+  cm.style.top  = posY + "px";
 }
 
 document.addEventListener("click", () => doc("contextMenu").classList.add("hidden"));
@@ -3231,8 +3254,9 @@ function bindContextMenu() {
   doc("cmDelete").addEventListener("click", async () => {
     if (!_ctxSector) return;
     const selectedIds = gantt.getSelectedSectorIds();
+    const pool = state.allSectors || state.sectors;
     const toDelete = (selectedIds.length > 1 && selectedIds.includes(_ctxSector.id))
-      ? state.sectors.filter(s => selectedIds.includes(s.id))
+      ? pool.filter(s => selectedIds.includes(s.id))
       : [_ctxSector];
     const label = toDelete.length > 1
       ? `${toDelete.length} chặng đã chọn`
@@ -3939,6 +3963,41 @@ function bindUI() {
     // Copy (Ctrl+C): copy selected sectors
     if ((e.ctrlKey || e.metaKey) && e.key === "c" && !inInput) {
       copySelectedSectors();
+    }
+
+    // Delete key: delete all selected sectors
+    if ((e.key === "Delete" || e.key === "Backspace") && !inInput) {
+      const selectedIds = gantt.getSelectedSectorIds();
+      if (selectedIds.length > 0) {
+        e.preventDefault();
+        const pool = state.allSectors || state.sectors;
+        const toDelete = pool.filter(s => selectedIds.includes(s.id));
+        if (toDelete.length === 0) return;
+        const label = toDelete.length > 1
+          ? `${toDelete.length} chặng đã chọn`
+          : `${toDelete[0].origin}→${toDelete[0].destination}`;
+        showConfirm(`Xoá ${label}?`, "Xoá chặng bay").then(async ok => {
+          if (!ok) return;
+          const deletedCopy = toDelete.map(s => ({ ...s }));
+          for (const s of toDelete) await API.deleteSector(s.id);
+          history.push({
+            label: `Delete ${toDelete.length} sector(s)`,
+            undo: async () => {
+              for (const s of deletedCopy) {
+                await API.createSector({ aircraft_id: s.aircraft_id, flight_date: s.flight_date,
+                  origin: s.origin, destination: s.destination, dep_utc: s.dep_utc, arr_utc: s.arr_utc,
+                  flight_number: s.flight_number, status: s.status });
+              }
+              await refreshGantt();
+            },
+            redo: async () => {
+              for (const s of deletedCopy) await API.deleteSector(s.id);
+              await refreshGantt();
+            },
+          });
+          await refreshGantt();
+        });
+      }
     }
 
     // Paste (Ctrl+V): open paste modal
