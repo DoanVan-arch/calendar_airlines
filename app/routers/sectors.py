@@ -281,6 +281,15 @@ def swap_aircraft_sectors(request: Request, payload: SwapAircraftPayload, db: Se
     }
 
 
+# ── Clear sector colors for an aircraft ────────────────────────────────────────
+@router.post("/clear-colors/aircraft/{ac_id}", status_code=200)
+def clear_sector_colors(ac_id: int, db: Session = Depends(get_db)):
+    """Set color=NULL on all sectors of the given aircraft so they inherit ac color dynamically."""
+    db.query(FlightSector).filter(FlightSector.aircraft_id == ac_id).update({"color": None})
+    db.commit()
+    return {"ok": True}
+
+
 # ── Warnings ───────────────────────────────────────────────────────────────────
 @router.get("/warnings")
 def get_warnings(
@@ -299,9 +308,26 @@ def get_warnings(
     # Mass TAT defaults
     default_tat_domestic = tat_map.pop("__DOMESTIC__", 40)
     default_tat_intl = tat_map.pop("__INTL__", 60)
+    default_tat_dom_to_intl = tat_map.pop("__DOM_TO_INTL__", 60)
+    default_tat_intl_to_dom = tat_map.pop("__INTL_TO_DOM__", 60)
     # Build airport timezone lookup for domestic/intl classification
     airport_tz = {ap.code: ap.timezone_offset for ap in db.query(Airport).all()}
     airport_dom = {ap.code: bool(ap.is_domestic) for ap in db.query(Airport).all()}
+
+    def _get_tat(station: str, prev_origin, prev_dest,
+                 next_origin, next_dest) -> int:
+        """Get required TAT (minutes) with transition support."""
+        if station in tat_map:
+            return tat_map[station]
+        # Check transition: inbound leg is domestic only if BOTH endpoints are domestic
+        if prev_origin and prev_dest and next_origin and next_dest:
+            inbound_dom  = airport_dom.get(prev_origin, True) and airport_dom.get(prev_dest, True)
+            outbound_dom = airport_dom.get(next_origin, True) and airport_dom.get(next_dest, True)
+            if inbound_dom != outbound_dom:
+                return default_tat_dom_to_intl if (inbound_dom and not outbound_dom) else default_tat_intl_to_dom
+        # Fallback: station-based
+        is_dom = airport_dom.get(station, True)
+        return default_tat_domestic if is_dom else default_tat_intl
     # Build curfew lookup: {code: (open, close)} — only airports with curfew set
     airport_curfew = {}
     for ap in db.query(Airport).all():
@@ -406,11 +432,8 @@ def get_warnings(
                 gap = dep_min - arr_min
                 if gap < 0:
                     gap += 1440
-                min_tat = tat_map.get(s.destination, None)
-                if min_tat is None:
-                    # Use mass TAT: domestic if is_domestic, else international
-                    is_dom = airport_dom.get(s.destination, False)
-                    min_tat = default_tat_domestic if is_dom else default_tat_intl
+                min_tat = _get_tat(s.destination, s.origin, s.destination,
+                                   next_s.origin, next_s.destination)
                 if gap < min_tat:
                     warnings.append({
                         "type": "TAT",
@@ -470,10 +493,8 @@ def get_warnings(
                 dep_min = time_to_minutes(first_today.dep_utc)
                 gap = (day_diff * 1440) - arr_min + dep_min
 
-                min_tat = tat_map.get(prev_sector.destination, None)
-                if min_tat is None:
-                    is_dom = airport_dom.get(prev_sector.destination, False)
-                    min_tat = default_tat_domestic if is_dom else default_tat_intl
+                min_tat = _get_tat(prev_sector.destination, prev_sector.origin, prev_sector.destination,
+                                   first_today.origin, first_today.destination)
 
                 if gap < min_tat:
                     warnings.append({

@@ -125,46 +125,91 @@ function downloadXLSX(data, filename = "schedule.xlsx") {
 
 function downloadExcel(data, filename) {
   if (typeof XLSX === "undefined") { alert("Thư viện XLSX chưa tải xong."); return; }
-  const wb = XLSX.utils.book_new();
-  let rows;
-  if (data.mode === "daily") {
-    rows = data.rows.map(r => ({
-      "Tàu":         r.aircraft_reg,
-      "Chặng bay":   r.route || (r.origin + "-" + r.destination),
-      "Điểm đi":    r.origin,
-      "Điểm đến":   r.destination,
-      [`Cất (${data.timezone})`]:  r.dep_display,
-      [`Hạ (${data.timezone})`]:   r.arr_display,
-      "Block":       minToHHMM(r.block_time_minutes),
-      "DAY":         r.day_of_week || "",
-      "Chuyến":      r.flight_number || "",
-      "Ngày bay":    r.date_range || r.flight_date || "",
-      "Số CB":       r.flight_count || 1,
-      "Ghế":         r.total_seats || 0,
-    }));
-  } else {
-    rows = data.rows.map(r => ({
-      "Chặng bay":   r.route || (r.origin + "-" + r.destination),
-      "Điểm đi":    r.origin,
-      "Điểm đến":   r.destination,
-      [`Cất (${data.timezone})`]:  r.dep_display,
-      [`Hạ (${data.timezone})`]:   r.arr_display,
-      "Block":       minToHHMM(r.block_time_minutes),
-      "DAY":         r.day_of_week || "",
-      "Ngày bay":    r.date_range,
-      "Số CB":       r.flight_count,
-      "Ghế":         r.total_seats || 0,
-      "Tàu":         r.aircraft.join(", "),
-    }));
+
+  // Apply same dom/intl filter as the web table
+  const domIntlFilter = doc("expDomIntl") ? doc("expDomIntl").value : "all";
+  const displayMode   = doc("expDisplay") ? doc("expDisplay").value : "flat";
+
+  let filteredRows = data.rows || [];
+  if (domIntlFilter !== "all") {
+    filteredRows = filteredRows.filter(r => {
+      const orig = state.airports && state.airports[r.origin];
+      const dest = state.airports && state.airports[r.destination];
+      const isDom = (orig && orig.is_domestic) && (dest && dest.is_domestic);
+      return domIntlFilter === "domestic" ? isDom : !isDom;
+    });
   }
+
+  const wb = XLSX.utils.book_new();
+  let rows = [];
+  const tz = data.timezone || "LCT";
+
+  if (displayMode === "grouped") {
+    // Sort same as web grouped view
+    const sorted = _sortTTRows([...filteredRows], "route");
+    let lastRoute = "";
+    for (const r of sorted) {
+      const route = r.route || (r.origin + "-" + r.destination);
+      const showRoute = route !== lastRoute;
+      lastRoute = route;
+      const acDisplay = r.aircraft_reg || (r.aircraft ? r.aircraft.join(", ") : "");
+      rows.push({
+        "Tàu":              acDisplay,
+        "Chặng bay":        showRoute ? route : "",
+        "Chuyến":           r.flight_number || "",
+        [`Cất (${tz})`]:   r.dep_display,
+        [`Hạ (${tz})`]:    r.arr_display,
+        "Block":            minToHHMM(r.block_time_minutes),
+        "Ngày bay":         r.date_range || r.flight_date || "",
+        "Day":              r.day_of_week || "",
+        "Số CB":            r.flight_count || 1,
+        "Ghế":              r.total_seats || r.seats || 0,
+      });
+    }
+  } else if (data.mode === "daily") {
+    for (const r of filteredRows) {
+      rows.push({
+        "Tàu":              r.aircraft_reg,
+        "Chặng bay":        r.route || (r.origin + "-" + r.destination),
+        "Chuyến":           r.flight_number || "",
+        [`Cất (${tz})`]:   r.dep_display,
+        [`Hạ (${tz})`]:    r.arr_display,
+        "Block":            minToHHMM(r.block_time_minutes),
+        "Ngày bay":         r.date_range || r.flight_date || "",
+        "Day":              r.day_of_week || "",
+        "Số CB":            r.flight_count || 1,
+        "Ghế":              r.total_seats || 0,
+      });
+    }
+  } else {
+    // group mode (flat display)
+    for (const r of filteredRows) {
+      rows.push({
+        "Tàu":              r.aircraft ? r.aircraft.join(", ") : "",
+        "Chặng bay":        r.route || (r.origin + "-" + r.destination),
+        "Chuyến":           r.flight_number || "",
+        [`Cất (${tz})`]:   r.dep_display,
+        [`Hạ (${tz})`]:    r.arr_display,
+        "Block":            minToHHMM(r.block_time_minutes),
+        "Ngày bay":         r.date_range || r.flight_date || "",
+        "Day":              r.day_of_week || "",
+        "Số CB":            r.flight_count || 1,
+        "Ghế":              r.total_seats || 0,
+      });
+    }
+  }
+
+  if (rows.length === 0) { alert("Không có dữ liệu để xuất."); return; }
+
   const ws = XLSX.utils.json_to_sheet(rows);
   // Auto-size columns
-  const colWidths = Object.keys(rows[0] || {}).map(k => {
+  const colWidths = Object.keys(rows[0]).map(k => {
     const maxLen = Math.max(k.length, ...rows.map(r => String(r[k] || "").length));
-    return { wch: Math.min(maxLen + 2, 30) };
+    return { wch: Math.min(maxLen + 2, 40) };
   });
   ws["!cols"] = colWidths;
-  XLSX.utils.book_append_sheet(wb, ws, data.mode === "daily" ? "Timetable" : "Grouped");
+  const sheetName = displayMode === "grouped" ? "Timetable (Grouped)" : (data.mode === "daily" ? "Timetable (Daily)" : "Timetable");
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
   XLSX.writeFile(wb, filename);
 }
 
@@ -301,9 +346,13 @@ async function loadReferenceData() {
   state.seasons = seasons;
   state.registrations = registrations;
 
-  // Route colors map: "ORIG-DEST" → color
+  // Route colors map: "ORIG-DEST" → color (only enabled ones)
   state.routeColors = {};
-  for (const rc of routeColors) state.routeColors[`${rc.origin}-${rc.destination}`] = rc.color;
+  for (const rc of routeColors) {
+    if (rc.enabled !== false) {
+      state.routeColors[`${rc.origin}-${rc.destination}`] = rc.color;
+    }
+  }
   state.routeColorEnabled = rcEnabledSetting.value === "true";
   doc("chkRouteColorEnabled").checked = state.routeColorEnabled;
 
@@ -1658,9 +1707,8 @@ async function saveChain() {
     }
   }
 
-  // Get aircraft color for new sectors
-  const ac = state.aircraft.find(a => a.id === acId);
-  const sectorColor = (ac && ac.color) ? ac.color : null;
+  // New sectors inherit aircraft color dynamically — don't persist it on the sector
+  const sectorColor = null;
 
   const createdIds = [];
   for (const baseDate of targetDates) {
@@ -1728,6 +1776,13 @@ function openAircraftModal(ac = null) {
   _syncAircraftModalFromRegSelect(ac);
 
   doc("aircraftModalOverlay").classList.remove("hidden");
+
+  // Show reset-sector-colors button only when editing (ac exists) and admin
+  const btnReset = doc("btnResetSectorColors");
+  if (btnReset) {
+    const showReset = ac && state.userRole === "admin";
+    btnReset.classList.toggle("hidden", !showReset);
+  }
 }
 
 /** Sync AC Type and free-text reg field from the current aircraftRegSelect value */
@@ -4037,10 +4092,42 @@ function bindUI() {
   doc("btnRouteColors").addEventListener("click", openRouteColorModal);
   doc("chkRouteColorEnabled").addEventListener("change", async (e) => {
     state.routeColorEnabled = e.target.checked;
+    // Sync modal checkbox
+    const modalChk = doc("chkRouteColorEnabledModal");
+    if (modalChk) modalChk.checked = e.target.checked;
     await API.setSetting("route_color_enabled", e.target.checked ? "true" : "false");
     refreshView();
   });
+  // Modal checkbox syncs back to toolbar toggle
+  const _modalRCChk = doc("chkRouteColorEnabledModal");
+  if (_modalRCChk) {
+    _modalRCChk.addEventListener("change", async (e) => {
+      state.routeColorEnabled = e.target.checked;
+      doc("chkRouteColorEnabled").checked = e.target.checked;
+      await API.setSetting("route_color_enabled", e.target.checked ? "true" : "false");
+      refreshView();
+    });
+  }
   doc("btnAddRouteColor").addEventListener("click", addRouteColor);
+  // Clear all route colors
+  const _btnClearRC = doc("btnClearAllRouteColors");
+  if (_btnClearRC) {
+    _btnClearRC.addEventListener("click", async () => {
+      if (state.userRole !== "admin") return;
+      const ok = await showConfirm("Xóa toàn bộ quy tắc màu chặng bay?", "Xóa hết màu chặng");
+      if (!ok) return;
+      try {
+        const colors = await API.getRouteColors();
+        for (const rc of colors) await API.deleteRouteColor(rc.id);
+        state.routeColors = {};
+        await renderRouteColorList();
+        if (state.routeColorEnabled) refreshView();
+        showToast("Đã xóa tất cả màu chặng bay.", "success");
+      } catch (err) {
+        alert("Lỗi: " + err.message);
+      }
+    });
+  }
 
   // Sector modal
   doc("btnSaveSector").addEventListener("click", saveSector);
@@ -4092,6 +4179,24 @@ function bindUI() {
 
   // Aircraft modal
   doc("btnSaveAircraft").addEventListener("click", saveAircraft);
+  doc("btnResetSectorColors").addEventListener("click", async () => {
+    const acId = parseInt(doc("aircraftId").value, 10);
+    if (!acId) return;
+    const ac = state.aircraft.find(a => a.id === acId);
+    const reg = ac ? ac.registration : `ID ${acId}`;
+    const ok = await showConfirm(
+      `Xóa màu cứng trên tất cả chặng của tàu ${reg}?\nCác chặng sẽ tự kế thừa màu tàu.`,
+      "Reset màu sectors"
+    );
+    if (!ok) return;
+    try {
+      await API.clearSectorColors(acId);
+      await refreshGantt();
+      showToast(`Đã reset màu sectors của ${reg}.`, "success");
+    } catch (err) {
+      alert("Lỗi: " + err.message);
+    }
+  });
   doc("aircraftRegSelect").addEventListener("change", () => _syncAircraftModalFromRegSelect(null));
   doc("aircraftColor").addEventListener("input", () => {
     doc("aircraftColor").dataset.hasColor = "1";
@@ -4390,6 +4495,9 @@ async function deleteNoteById() {
 // ─── Route Color Management ───────────────────────────────────────────────────
 async function openRouteColorModal() {
   doc("routeColorModalOverlay").classList.remove("hidden");
+  // Sync modal checkbox with current state
+  const modalChk = doc("chkRouteColorEnabledModal");
+  if (modalChk) modalChk.checked = state.routeColorEnabled;
   await renderRouteColorList();
 }
 
@@ -4412,6 +4520,7 @@ async function renderRouteColorList() {
   list.innerHTML = `
     <table class="data-table" style="width:100%;">
       <thead><tr>
+        <th>Áp dụng</th>
         <th>Chặng</th>
         <th>Màu</th>
         ${isAdmin ? "<th>Thao tác</th>" : ""}
@@ -4419,9 +4528,16 @@ async function renderRouteColorList() {
       <tbody>
         ${colors.map(rc => `
           <tr>
+            <td style="text-align:center;">
+              <input type="checkbox" class="rc-enabled-chk" data-id="${rc.id}"
+                ${rc.enabled !== false ? "checked" : ""}
+                ${isAdmin ? "" : "disabled"}
+                title="Bật/tắt màu chặng này"
+                style="width:16px;height:16px;cursor:${isAdmin ? "pointer" : "default"};">
+            </td>
             <td><strong>${rc.origin}</strong> → <strong>${rc.destination}</strong></td>
             <td>
-              <span style="display:inline-block;width:32px;height:18px;border-radius:3px;background:${rc.color};vertical-align:middle;"></span>
+              <span style="display:inline-block;width:32px;height:18px;border-radius:3px;background:${rc.color};vertical-align:middle;opacity:${rc.enabled !== false ? 1 : 0.4};"></span>
               <code style="margin-left:4px;font-size:12px;">${rc.color}</code>
             </td>
             ${isAdmin ? `
@@ -4436,6 +4552,31 @@ async function renderRouteColorList() {
       </tbody>
     </table>
   `;
+
+  // Attach checkbox change handlers
+  list.querySelectorAll(".rc-enabled-chk").forEach(chk => {
+    chk.addEventListener("change", async () => {
+      const id = parseInt(chk.dataset.id, 10);
+      try {
+        await API.patchRouteColor(id, { enabled: chk.checked });
+        await _reloadRouteColorState();
+        if (state.routeColorEnabled) refreshView();
+      } catch (err) {
+        alert("Lỗi: " + err.message);
+        chk.checked = !chk.checked; // revert
+      }
+    });
+  });
+}
+
+async function _reloadRouteColorState() {
+  const rcList = await API.getRouteColors();
+  state.routeColors = {};
+  for (const rc of rcList) {
+    if (rc.enabled !== false) {
+      state.routeColors[`${rc.origin}-${rc.destination}`] = rc.color;
+    }
+  }
 }
 
 async function addRouteColor() {
@@ -4451,10 +4592,22 @@ async function addRouteColor() {
     await API.createRouteColor({ origin, destination: dest, color });
     doc("rcOrigin").value = "";
     doc("rcDest").value = "";
+
+    // Ask about reverse route (if it doesn't already exist)
+    const existingColors = await API.getRouteColors();
+    const reverseExists = existingColors.some(rc => rc.origin === dest && rc.destination === origin);
+    if (!reverseExists) {
+      const addReverse = await showConfirm(
+        `Thêm chặng ngược ${dest} → ${origin} với cùng màu không?`,
+        "Thêm chặng ngược"
+      );
+      if (addReverse) {
+        await API.createRouteColor({ origin: dest, destination: origin, color });
+      }
+    }
+
     // Reload state
-    const rcList = await API.getRouteColors();
-    state.routeColors = {};
-    for (const rc of rcList) state.routeColors[`${rc.origin}-${rc.destination}`] = rc.color;
+    await _reloadRouteColorState();
     await renderRouteColorList();
     if (state.routeColorEnabled) refreshView();
   } catch (err) {
@@ -4468,9 +4621,7 @@ async function deleteRouteColor(id) {
   try {
     await API.deleteRouteColor(id);
     // Reload state
-    const rcList = await API.getRouteColors();
-    state.routeColors = {};
-    for (const rc of rcList) state.routeColors[`${rc.origin}-${rc.destination}`] = rc.color;
+    await _reloadRouteColorState();
     await renderRouteColorList();
     if (state.routeColorEnabled) refreshView();
   } catch (err) {

@@ -521,6 +521,20 @@ def update_route_color(rc_id: int, payload: RouteColorCreate, db: Session = Depe
     return rc
 
 
+@router.patch("/route-colors/{rc_id}", response_model=RouteColorOut)
+def toggle_route_color_enabled(rc_id: int, payload: dict, db: Session = Depends(get_db)):
+    rc = db.query(RouteColor).filter(RouteColor.id == rc_id).first()
+    if not rc:
+        raise HTTPException(404, "Route color not found")
+    if "enabled" in payload:
+        rc.enabled = bool(payload["enabled"])
+    if "color" in payload:
+        rc.color = payload["color"]
+    db.commit()
+    db.refresh(rc)
+    return rc
+
+
 @router.delete("/route-colors/{rc_id}", status_code=204)
 def delete_route_color(rc_id: int, db: Session = Depends(get_db)):
     rc = db.query(RouteColor).filter(RouteColor.id == rc_id).first()

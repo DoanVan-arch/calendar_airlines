@@ -36,6 +36,7 @@ const API = (() => {
     bulkRestoreSectors: (ids)  => req("POST",  "/api/sectors/bulk-restore", { sector_ids: ids }),
     getWarnings: (date)        => req("GET",   `/api/sectors/warnings?date=${date}`),
     swapAircraft: (d)          => req("POST",  "/api/sectors/swap-aircraft", d),
+    clearSectorColors: (acId)  => req("POST",  `/api/sectors/clear-colors/aircraft/${acId}`, {}),
 
     // ── Rules ────────────────────────────────────────────────
     getAirports: ()              => req("GET",    "/api/rules/airports"),
@@ -86,6 +87,7 @@ const API = (() => {
     getRouteColors: ()           => req("GET",    "/api/rules/route-colors"),
     createRouteColor: (d)        => req("POST",   "/api/rules/route-colors", d),
     updateRouteColor: (id, d)    => req("PUT",    `/api/rules/route-colors/${id}`, d),
+    patchRouteColor: (id, d)     => req("PATCH",  `/api/rules/route-colors/${id}`, d),
     deleteRouteColor: (id)       => req("DELETE", `/api/rules/route-colors/${id}`),
 
     // ── App settings ────────────────────────────────────────

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PikA - Pickleball Airways</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=43" />
+  <link rel="stylesheet" href="/static/css/style.css?v=46" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
 </head>
 <body>
@@ -369,6 +369,9 @@
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" data-close="aircraftModalOverlay">Huỷ</button>
+      <button class="btn btn-warning btn-sm hidden" id="btnResetSectorColors" title="Xóa màu cứng đã lưu trên từng chặng — các chặng sẽ tự kế thừa màu tàu" style="margin-right:auto;">
+        <i class="fas fa-paint-roller"></i> Reset màu sectors
+      </button>
       <button class="btn btn-primary" id="btnSaveAircraft">Lưu</button>
     </div>
   </div>
@@ -1142,8 +1145,15 @@
       <button class="close-btn" data-close="routeColorModalOverlay"><i class="fas fa-times"></i></button>
     </div>
     <div class="modal-body">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px; padding:10px 12px; background:var(--bg-surface2); border-radius:8px; border:1px solid var(--border);">
+        <input type="checkbox" id="chkRouteColorEnabledModal" style="width:16px;height:16px;cursor:pointer;" />
+        <label for="chkRouteColorEnabledModal" style="cursor:pointer; font-size:13px; font-weight:600; color:var(--text-bright);">
+          Áp dụng màu theo chặng bay
+        </label>
+        <span style="font-size:12px; color:var(--text-secondary); margin-left:4px;">(Nếu bật, màu chặng ưu tiên hơn màu line)</span>
+      </div>
       <p style="margin-bottom:12px; color: var(--text-secondary); font-size:13px;">
-        Gán màu cho từng chặng bay (VD: HAN-SGN = đỏ). Khi bật, màu chặng sẽ được ưu tiên hơn màu line.
+        Gán màu cho từng chặng bay (VD: HAN-SGN = đỏ).
       </p>
       <div class="route-color-form admin-only" style="display:flex; gap:8px; align-items:center; margin-bottom:12px;">
         <input type="text" id="rcOrigin" placeholder="Đi (VD: HAN)" maxlength="10"
@@ -1159,6 +1169,7 @@
       </div>
     </div>
     <div class="modal-footer">
+      <button class="btn btn-danger admin-only" id="btnClearAllRouteColors" style="margin-right:auto;"><i class="fas fa-trash-alt"></i> Xóa hết</button>
       <button class="btn btn-secondary" data-close="routeColorModalOverlay">Đóng</button>
     </div>
   </div>
@@ -1181,10 +1192,10 @@
 </div>
 
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-<script src="/static/js/api.js?v=43"></script>
-<script src="/static/js/history.js?v=43"></script>
-<script src="/static/js/gantt.js?v=43"></script>
-<script src="/static/js/app.js?v=43"></script>
+<script src="/static/js/api.js?v=46"></script>
+<script src="/static/js/history.js?v=46"></script>
+<script src="/static/js/gantt.js?v=46"></script>
+<script src="/static/js/app.js?v=46"></script>
 <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
 
 <!-- ── Format Picker Modal (Import / Export) ─────────────────────────── -->

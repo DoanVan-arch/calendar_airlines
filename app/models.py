@@ -136,6 +136,7 @@ class RouteColor(Base):
     origin = Column(String(10), nullable=False)
     destination = Column(String(10), nullable=False)
     color = Column(String(20), nullable=False)  # hex color e.g. "#ef4444"
+    enabled = Column(Boolean, default=True, nullable=False)  # per-row enable/disable
 
 
 class AppSetting(Base):

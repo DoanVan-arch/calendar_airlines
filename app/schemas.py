@@ -309,4 +309,5 @@ class RouteColorCreate(RouteColorBase):
 
 class RouteColorOut(RouteColorBase):
     id: int
+    enabled: bool = True
     model_config = {"from_attributes": True}

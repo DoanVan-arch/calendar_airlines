@@ -329,6 +329,13 @@ def _migrate_db():
         except Exception:
             pass  # Column already exists
 
+        # Add enabled column to route_colors table
+        try:
+            conn.execute(text("ALTER TABLE route_colors ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT 1"))
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+
         # Add is_domestic column to airports table
         try:
             conn.execute(text("ALTER TABLE airports ADD COLUMN is_domestic BOOLEAN DEFAULT 1"))
