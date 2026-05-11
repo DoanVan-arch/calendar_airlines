@@ -2613,7 +2613,9 @@ function renderTimetableTable(data) {
   const el = doc("exportResult");
   el.innerHTML = "";
 
-  // Sort buttons bar
+  // Sort buttons bar — placed in its own container OUTSIDE the scrollable result area
+  const sortContainer = doc("ttSortBarContainer");
+  sortContainer.innerHTML = "";
   const sortBar = document.createElement("div");
   sortBar.style.cssText = "margin:8px 0;display:flex;gap:6px;align-items:center;";
   sortBar.innerHTML = `
@@ -2621,7 +2623,7 @@ function renderTimetableTable(data) {
     <button class="btn btn-secondary btn-sm tt-sort-btn" data-sort="default">Mặc định (Tàu → Chặng)</button>
     <button class="btn btn-secondary btn-sm tt-sort-btn" data-sort="route">Theo đường bay</button>
   `;
-  el.appendChild(sortBar);
+  sortContainer.appendChild(sortBar);
 
   // Store original data for re-sorting / re-filtering
   state._ttDisplayData = data;

@@ -316,15 +316,22 @@ def get_warnings(
 
     def _get_tat(station: str, prev_origin, prev_dest,
                  next_origin, next_dest) -> int:
-        """Get required TAT (minutes) with transition support."""
-        if station in tat_map:
-            return tat_map[station]
-        # Check transition: inbound leg is domestic only if BOTH endpoints are domestic
+        """Get required TAT (minutes) with transition support.
+        Transition TAT (DOM→INTL or INTL→DOM) takes priority over station-specific rules,
+        because the type change requires a different handling regardless of the station.
+        """
+        # Check transition first: inbound leg is domestic only if BOTH endpoints are domestic
         if prev_origin and prev_dest and next_origin and next_dest:
             inbound_dom  = airport_dom.get(prev_origin, True) and airport_dom.get(prev_dest, True)
             outbound_dom = airport_dom.get(next_origin, True) and airport_dom.get(next_dest, True)
             if inbound_dom != outbound_dom:
                 return default_tat_dom_to_intl if (inbound_dom and not outbound_dom) else default_tat_intl_to_dom
+        # Station-specific rule
+        if station in tat_map:
+            return tat_map[station]
+        # Fallback: station-based domestic/intl default
+        is_dom = airport_dom.get(station, True)
+        return default_tat_domestic if is_dom else default_tat_intl
         # Fallback: station-based
         is_dom = airport_dom.get(station, True)
         return default_tat_domestic if is_dom else default_tat_intl

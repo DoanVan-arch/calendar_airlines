@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PikA - Pickleball Airways</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=46" />
+  <link rel="stylesheet" href="/static/css/style.css?v=47" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
 </head>
 <body>
@@ -574,6 +574,9 @@
         <div id="ttRouteFilterChips" style="display:flex;gap:4px;flex-wrap:wrap;"></div>
         <button class="btn btn-secondary btn-sm" id="btnTTFilterClear" style="font-size:10px;">Bỏ lọc</button>
       </div>
+
+      <!-- Sort bar: injected here by JS so it stays above the scroll area -->
+      <div id="ttSortBarContainer"></div>
 
       <div class="export-result" id="exportResult"></div>
     </div>
@@ -1192,10 +1195,10 @@
 </div>
 
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-<script src="/static/js/api.js?v=46"></script>
-<script src="/static/js/history.js?v=46"></script>
-<script src="/static/js/gantt.js?v=46"></script>
-<script src="/static/js/app.js?v=46"></script>
+<script src="/static/js/api.js?v=47"></script>
+<script src="/static/js/history.js?v=47"></script>
+<script src="/static/js/gantt.js?v=47"></script>
+<script src="/static/js/app.js?v=47"></script>
 <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
 
 <!-- ── Format Picker Modal (Import / Export) ─────────────────────────── -->

@@ -608,28 +608,26 @@ class GanttChart {
     const gapMin = depMin - arrMin;
     if (gapMin <= 0) return null;  // overlapping or no gap
 
-    // Determine required TAT (station-specific or mass default, with transition support)
+    // Determine required TAT (transition takes priority over station-specific rule)
     const dest = prev.destination;
     let reqTAT;
-    if (state.tatRules && state.tatRules[dest]) {
+    const mass = state.massTAT || { domestic: 40, international: 60, dom_to_intl: 60, intl_to_dom: 60 };
+    // Check for transition TAT first (previous leg type ≠ next leg type)
+    // A flight is domestic only if BOTH endpoints are domestic
+    const apPrevOrig = state.airports && state.airports[prev.origin];
+    const apPrevDest = state.airports && state.airports[prev.destination];
+    const apNextOrig = state.airports && state.airports[next.origin];
+    const apNextDest = state.airports && state.airports[next.destination];
+    const inboundDom = apPrevOrig && apPrevDest && apPrevOrig.is_domestic && apPrevDest.is_domestic;
+    const outboundDom = apNextOrig && apNextDest && apNextOrig.is_domestic && apNextDest.is_domestic;
+    if (inboundDom !== outboundDom) {
+      reqTAT = inboundDom ? (mass.dom_to_intl || mass.international) : (mass.intl_to_dom || mass.domestic);
+    } else if (state.tatRules && state.tatRules[dest]) {
       reqTAT = state.tatRules[dest].min_tat_minutes;
     } else {
-      const mass = state.massTAT || { domestic: 40, international: 60, dom_to_intl: 60, intl_to_dom: 60 };
-      // Check for transition TAT (previous leg type ≠ next leg type)
-      // A flight is domestic only if BOTH endpoints are domestic
-      const apPrevOrig = state.airports && state.airports[prev.origin];
-      const apPrevDest = state.airports && state.airports[prev.destination];
-      const apNextOrig = state.airports && state.airports[next.origin];
-      const apNextDest = state.airports && state.airports[next.destination];
-      const inboundDom = apPrevOrig && apPrevDest && apPrevOrig.is_domestic && apPrevDest.is_domestic;
-      const outboundDom = apNextOrig && apNextDest && apNextOrig.is_domestic && apNextDest.is_domestic;
-      if (inboundDom !== outboundDom) {
-        reqTAT = inboundDom ? (mass.dom_to_intl || mass.international) : (mass.intl_to_dom || mass.domestic);
-      } else {
-        const ap = state.airports && state.airports[dest];
-        const isDomestic = ap && ap.is_domestic;
-        reqTAT = isDomestic ? mass.domestic : mass.international;
-      }
+      const ap = state.airports && state.airports[dest];
+      const isDomestic = ap && ap.is_domestic;
+      reqTAT = isDomestic ? mass.domestic : mass.international;
     }
 
     const el = document.createElement("div");
@@ -722,11 +720,18 @@ class GanttChart {
     el.style.width = width + "px";
 
     const rcKey = `${sector.origin}-${sector.destination}`;
-    // When route coloring is enabled, route color takes top priority (overrides sector & aircraft colors)
-    const bg = (this._routeColorMap && this._routeColorMap[rcKey])
-      || sector.color
-      || (this._acColorMap && this._acColorMap[sector.aircraft_id])
-      || routeColor(sector.origin, sector.destination);
+    // When route coloring is enabled:
+    //   - sectors WITH a matching route color → use that color
+    //   - sectors WITHOUT a match → silver/grey to visually distinguish them
+    // When disabled, normal priority: sector.color → ac.color → hash
+    let bg;
+    if (this._routeColorMap) {
+      bg = this._routeColorMap[rcKey] || "#a0a0b0";
+    } else {
+      bg = sector.color
+        || (this._acColorMap && this._acColorMap[sector.aircraft_id])
+        || routeColor(sector.origin, sector.destination);
+    }
     if (sector.status === "cancelled") {
       el.style.background = "rgba(60,60,70,0.8)";
     } else {
