@@ -1524,15 +1524,10 @@ function _parseChainRoutes() {
  * different domestic/international types, use the transition TAT.
  */
 function _getTATForStation(station, prevOrigin, nextDest) {
-  // 1. Station-specific rule always wins
-  if (state.tatRules && state.tatRules[station]) {
-    return state.tatRules[station].min_tat_minutes;
-  }
-
   const mass = state.massTAT || { domestic: 40, international: 60, dom_to_intl: 60, intl_to_dom: 60 };
 
-  // 2. Check for transition TAT if we know inbound origin + outbound destination
-  // prevOrigin = origin of inbound leg, station = destination of inbound = origin of outbound, nextDest = destination of outbound
+  // 1. Transition TAT takes priority (INTL→DOM or DOM→INTL)
+  // prevOrigin = origin of inbound leg, station = turnaround, nextDest = destination of outbound
   // A flight is domestic only if BOTH endpoints are domestic
   if (prevOrigin && nextDest) {
     const apPrevOrig = state.airports && state.airports[prevOrigin];
@@ -1544,6 +1539,11 @@ function _getTATForStation(station, prevOrigin, nextDest) {
       if (inboundDom && !outboundDom) return mass.dom_to_intl || mass.international;
       if (!inboundDom && outboundDom) return mass.intl_to_dom || mass.domestic;
     }
+  }
+
+  // 2. Station-specific rule
+  if (state.tatRules && state.tatRules[station]) {
+    return state.tatRules[station].min_tat_minutes;
   }
 
   // 3. Fallback: station-based domestic/international mass TAT
