@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PikA - Pickleball Airways</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=48" />
+  <link rel="stylesheet" href="/static/css/style.css?v=51" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
 </head>
 <body>
@@ -393,6 +393,7 @@
         
         <button class="tab-btn admin-only" data-tab="tabSeasons">Mùa bay</button>
         <button class="tab-btn admin-only" data-tab="tabUsers">Người dùng</button>
+        <button class="tab-btn" data-tab="tabRoster">Roster</button>
       </div>
 
       <!-- TAT tab -->
@@ -513,6 +514,75 @@
         </table>
       </div>
       </div>
+
+      <!-- Roster tab -->
+      <div class="tab-content" id="tabRoster">
+        <div class="table-toolbar">
+          <button class="btn btn-success btn-sm admin-only" id="btnAddRoster"><i class="fas fa-plus"></i> Thêm</button>
+          <input type="text" class="table-search" id="searchRoster" placeholder="Tìm kiếm..." />
+        </div>
+        <div class="table-wrapper">
+          <table class="data-table" id="rosterTable">
+            <thead>
+              <tr>
+                <th>FDP Từ</th><th>FDP Đến</th>
+                <th>1-2 chặng</th><th>3</th><th>4</th><th>5</th><th>6</th><th>7</th>
+                <th class="admin-only"></th>
+              </tr>
+            </thead>
+            <tbody id="rosterTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Roster Rule Form Modal -->
+<div class="modal-overlay hidden" id="rosterFormModal">
+  <div class="modal" id="rosterFormModalInner">
+    <div class="modal-header">
+      <h2 id="rosterFormTitle">Thêm Roster Rule</h2>
+      <button class="close-btn" data-close="rosterFormModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="rosterRuleId" />
+      <div class="form-row">
+        <div class="form-group">
+          <label>FDP từ (HH:MM) <span class="required">*</span></label>
+          <input type="text" id="rosterFdpFrom" placeholder="06:00" maxlength="5" class="time-input-24h" />
+        </div>
+        <div class="form-group">
+          <label>FDP đến (HH:MM) <span class="required">*</span></label>
+          <input type="text" id="rosterFdpTo" placeholder="13:29" maxlength="5" class="time-input-24h" />
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Max FDP 1-2 chặng</label><input type="text" id="rosterFdp12" placeholder="13:00" maxlength="5" class="time-input-24h" /></div>
+        <div class="form-group"><label>3 chặng</label><input type="text" id="rosterFdp3" placeholder="12:30" maxlength="5" class="time-input-24h" /></div>
+        <div class="form-group"><label>4 chặng</label><input type="text" id="rosterFdp4" placeholder="12:00" maxlength="5" class="time-input-24h" /></div>
+        <div class="form-group"><label>5 chặng</label><input type="text" id="rosterFdp5" placeholder="11:30" maxlength="5" class="time-input-24h" /></div>
+        <div class="form-group"><label>6 chặng</label><input type="text" id="rosterFdp6" placeholder="11:00" maxlength="5" class="time-input-24h" /></div>
+        <div class="form-group"><label>7 chặng</label><input type="text" id="rosterFdp7" placeholder="10:30" maxlength="5" class="time-input-24h" /></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Sign On trước (phút)</label>
+          <input type="number" id="rosterSignOn" value="60" min="0" max="240" />
+        </div>
+        <div class="form-group">
+          <label>Sign Off sau (phút)</label>
+          <input type="number" id="rosterSignOff" value="30" min="0" max="240" />
+        </div>
+        <div class="form-group">
+          <label>No. Crew Set</label>
+          <input type="number" id="rosterNoCrewSet" value="1" min="1" max="10" />
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-secondary" data-close="rosterFormModal">Huỷ</button>
+        <button class="btn btn-primary" id="btnSaveRoster">Lưu</button>
+      </div>
     </div>
   </div>
 </div>
@@ -563,10 +633,17 @@
             <option value="international">Quốc tế</option>
           </select>
         </div>
+        <div class="form-group">
+          <label>Tàu bay</label>
+          <select id="expAircraft">
+            <option value="">Tất cả tàu bay</option>
+          </select>
+        </div>
       </div>
       <button class="btn btn-primary" id="btnRunExport"><i class="fas fa-search"></i> Xem</button>
       <button class="btn btn-secondary" id="btnDownloadTT"><i class="fas fa-download"></i> Tải JSON</button>
       <button class="btn btn-secondary" id="btnDownloadExcel"><i class="fas fa-file-excel"></i> Tải Excel</button>
+      <button class="btn btn-secondary" id="btnToggleRosterCols" title="Ẩn/hiện cột Roster"><i class="fas fa-user-clock"></i> Roster</button>
 
       <!-- Route filter (populated after data loads) -->
       <div id="ttRouteFilterWrap" class="hidden" style="margin-top:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
@@ -1195,10 +1272,10 @@
 </div>
 
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-<script src="/static/js/api.js?v=48"></script>
-<script src="/static/js/history.js?v=48"></script>
-<script src="/static/js/gantt.js?v=48"></script>
-<script src="/static/js/app.js?v=48"></script>
+<script src="/static/js/api.js?v=51"></script>
+<script src="/static/js/history.js?v=51"></script>
+<script src="/static/js/gantt.js?v=51"></script>
+<script src="/static/js/app.js?v=51"></script>
 <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
 
 <!-- ── Format Picker Modal (Import / Export) ─────────────────────────── -->

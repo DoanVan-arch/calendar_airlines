@@ -8,13 +8,14 @@ import datetime
 import openpyxl
 
 from ..database import get_db
-from ..models import TATRule, BlockTimeRule, Airport, Registration, RouteColor, AppSetting
+from ..models import TATRule, BlockTimeRule, Airport, Registration, RouteColor, AppSetting, RosterRule
 from ..schemas import (
     TATRuleCreate, TATRuleOut,
     BlockTimeRuleCreate, BlockTimeRuleOut,
     AirportCreate, AirportOut,
     RegistrationCreate, RegistrationUpdate, RegistrationOut,
     RouteColorCreate, RouteColorOut,
+    RosterRuleCreate, RosterRuleOut,
 )
 
 router = APIRouter()
@@ -561,3 +562,39 @@ def set_setting(key: str, payload: dict, db: Session = Depends(get_db)):
         db.add(AppSetting(key=key, value=value))
     db.commit()
     return {"key": key, "value": value}
+
+
+# ── Roster Rules ───────────────────────────────────────────────────────────────
+@router.get("/roster", response_model=List[RosterRuleOut])
+def list_roster_rules(db: Session = Depends(get_db)):
+    return db.query(RosterRule).order_by(RosterRule.id).all()
+
+
+@router.post("/roster", response_model=RosterRuleOut, status_code=201)
+def create_roster_rule(payload: RosterRuleCreate, db: Session = Depends(get_db)):
+    r = RosterRule(**payload.model_dump())
+    db.add(r)
+    db.commit()
+    db.refresh(r)
+    return r
+
+
+@router.put("/roster/{rule_id}", response_model=RosterRuleOut)
+def update_roster_rule(rule_id: int, payload: RosterRuleCreate, db: Session = Depends(get_db)):
+    r = db.query(RosterRule).filter(RosterRule.id == rule_id).first()
+    if not r:
+        raise HTTPException(404, "Roster rule not found")
+    for k, v in payload.model_dump().items():
+        setattr(r, k, v)
+    db.commit()
+    db.refresh(r)
+    return r
+
+
+@router.delete("/roster/{rule_id}", status_code=204)
+def delete_roster_rule(rule_id: int, db: Session = Depends(get_db)):
+    r = db.query(RosterRule).filter(RosterRule.id == rule_id).first()
+    if not r:
+        raise HTTPException(404, "Roster rule not found")
+    db.delete(r)
+    db.commit()

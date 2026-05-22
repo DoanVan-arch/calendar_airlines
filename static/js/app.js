@@ -2063,6 +2063,7 @@ async function openRulesModal() {
     renderBTTable(),
     renderRegTable(),
     renderAirportTable(),
+    renderRosterTable(),
   ]);
   if (state.userRole === "admin") {
     await Promise.all([renderUserTable(), renderSeasonTable()]);
@@ -2588,6 +2589,19 @@ async function openExportModal() {
   const lastOfMonth  = dateToStr(new Date(new Date(today).getFullYear(), new Date(today).getMonth() + 1, 0));
   doc("expStart").value = firstOfMonth;
   doc("expEnd").value   = lastOfMonth;
+  // Populate aircraft combobox
+  const acSel = doc("expAircraft");
+  if (acSel) {
+    acSel.innerHTML = '<option value="">Tất cả tàu bay</option>';
+    const acList = (state.aircraft || []).filter(a => a.registration_id); // exclude TẠM
+    acList.sort((a, b) => (a.line_order || 0) - (b.line_order || 0));
+    for (const ac of acList) {
+      const opt = document.createElement("option");
+      opt.value = ac.registration;
+      opt.textContent = ac.registration + (ac.name ? ` (${ac.name})` : "");
+      acSel.appendChild(opt);
+    }
+  }
   doc("exportModalOverlay").classList.remove("hidden");
   doc("exportResult").innerHTML = "";
 }
@@ -2727,6 +2741,9 @@ function _applyTTFilter(el, sortBar) {
   let rows = state._ttAllRows;
   // Domestic / international filter
   rows = _applyDomIntlFilter(rows);
+  // Aircraft filter
+  const acFilter = doc("expAircraft") ? doc("expAircraft").value : "";
+  if (acFilter) rows = rows.filter(r => (r.aircraft_reg || (r.aircraft && r.aircraft.join(",") || "")) === acFilter || (r.aircraft && r.aircraft.includes(acFilter)));
   if (state._ttActiveRoutes && state._ttActiveRoutes.size > 0) {
     // Build pair-aware set: for each selected route, also include its reverse
     const pairSet = new Set();
@@ -2753,6 +2770,9 @@ function _applyTTSort(sortMode, el, sortBar) {
   let rows = state._ttAllRows;
   // Domestic / international filter
   rows = _applyDomIntlFilter(rows);
+  // Aircraft filter
+  const acFilter = doc("expAircraft") ? doc("expAircraft").value : "";
+  if (acFilter) rows = rows.filter(r => (r.aircraft_reg || (r.aircraft && r.aircraft.join(",") || "")) === acFilter || (r.aircraft && r.aircraft.includes(acFilter)));
   if (state._ttActiveRoutes && state._ttActiveRoutes.size > 0) {
     // Build pair-aware set: for each selected route, also include its reverse
     const pairSet = new Set();
@@ -2822,15 +2842,47 @@ function _renderTTRows(container, data) {
   if (oldTable) oldTable.remove();
 
   const displayMode = data.displayMode || "flat";
+  const showRoster = !!state._rosterColsVisible;
+
+  // AC label map: aircraft registration → "AC1", "AC2", ...
+  const acMap = _buildAcMap();
+
+  // Roster extra header cells
+  const rHdr = showRoster
+    ? `<th class="roster-col">AC</th><th class="roster-col">Flight Time</th><th class="roster-col">Sign On</th><th class="roster-col">Sign Off</th><th class="roster-col">FDP</th><th class="roster-col">Crew Set</th>`
+    : "";
+
+  /** Build roster cells for a row.
+   *  For daily/flat mode we have per-sector data; for grouped mode we skip detailed calc. */
+  function rosterCells(r) {
+    if (!showRoster) return "";
+    const reg = r.aircraft_reg || (r.aircraft ? r.aircraft[0] : "");
+    const acLabel = acMap[reg] || "—";
+    const flightTime = r.block_time_minutes ? minToHHMM(r.block_time_minutes) : "—";
+    // Sign on/off: use first dep and last arr from roster rules (sign_on_minutes before dep, sign_off_minutes after arr)
+    // For individual rows we use the sector's dep_display as FDP start
+    const rule = _getRosterRule(r.dep_display || r.dep_utc || "06:00", 1);
+    const signOnMin = rule ? rule.sign_on_minutes : 60;
+    const signOffMin = rule ? rule.sign_off_minutes : 30;
+    const depMin = timeToMin(r.dep_display || r.dep_utc || "00:00");
+    const arrMin_ = timeToMin(r.arr_display || r.arr_utc || "00:00");
+    const signOnTime  = minToHHMM((depMin - signOnMin + 1440) % 1440);
+    const signOffTime = minToHHMM((arrMin_ + signOffMin) % 1440);
+    // FDP = from sign-on to sign-off
+    let fdpMin = (arrMin_ + signOffMin) - (depMin - signOnMin);
+    if (fdpMin < 0) fdpMin += 1440;
+    const fdpStr = minToHHMM(fdpMin);
+    const noCrewSet = rule ? rule.no_crew_set : 1;
+    return `<td class="roster-col">${acLabel}</td><td class="roster-col">${flightTime}</td><td class="roster-col">${signOnTime}</td><td class="roster-col">${signOffTime}</td><td class="roster-col">${fdpStr}</td><td class="roster-col">${noCrewSet}</td>`;
+  }
 
   if (displayMode === "grouped") {
     // ── Grouped display: route shown once, sub-rows for each flight ──
-    // First, sort by route (pair-grouped) for proper grouping
     const sorted = _sortTTRows([...data.rows], "route");
     const hdr = `<tr>
       <th>Tàu</th><th>Chặng bay</th><th>Chuyến</th>
       <th>Cất (${data.timezone})</th><th>Hạ (${data.timezone})</th>
-      <th>Block</th><th>Ngày bay</th><th>Day</th><th>Số CB</th><th>Ghế</th></tr>`;
+      <th>Block</th><th>Ngày bay</th><th>Day</th><th>Số CB</th><th>Ghế</th>${rHdr}</tr>`;
     let rowsHtml = "";
     let lastRoute = "";
     for (const r of sorted) {
@@ -2847,7 +2899,7 @@ function _renderTTRows(container, data) {
         <td>${r.date_range || r.flight_date || ""}</td>
         <td>${r.day_of_week || ""}</td>
         <td>${r.flight_count || 1}</td>
-        <td>${r.total_seats || r.seats || 0}</td></tr>`;
+        <td>${r.total_seats || r.seats || 0}</td>${rosterCells(r)}</tr>`;
     }
     container.insertAdjacentHTML("beforeend",
       `<table class="tt-table"><thead>${hdr}</thead><tbody>${rowsHtml}</tbody></table>`);
@@ -2855,7 +2907,7 @@ function _renderTTRows(container, data) {
     const hdr = `<tr>
       <th>Tàu</th><th>Chặng bay</th><th>Chuyến</th>
       <th>Cất (${data.timezone})</th><th>Hạ (${data.timezone})</th>
-      <th>Block</th><th>Ngày bay</th><th>Day</th><th>Số CB</th><th>Ghế</th></tr>`;
+      <th>Block</th><th>Ngày bay</th><th>Day</th><th>Số CB</th><th>Ghế</th>${rHdr}</tr>`;
     const rows = data.rows.map(r => `<tr>
       <td>${r.aircraft_reg}</td>
       <td>${r.route || r.origin + "-" + r.destination}</td>
@@ -2864,14 +2916,14 @@ function _renderTTRows(container, data) {
       <td>${minToHHMM(r.block_time_minutes)}</td>
       <td>${r.date_range || r.flight_date || ""}</td><td>${r.day_of_week}</td>
       <td>${r.flight_count || 1}</td>
-      <td>${r.total_seats || 0}</td></tr>`).join("");
+      <td>${r.total_seats || 0}</td>${rosterCells(r)}</tr>`).join("");
     container.insertAdjacentHTML("beforeend",
       `<table class="tt-table"><thead>${hdr}</thead><tbody>${rows}</tbody></table>`);
   } else {
     const hdr = `<tr>
       <th>Tàu</th><th>Chặng bay</th><th>Chuyến</th>
       <th>Cất (${data.timezone})</th><th>Hạ (${data.timezone})</th>
-      <th>Block</th><th>Ngày bay</th><th>Day</th><th>Số CB</th><th>Ghế</th></tr>`;
+      <th>Block</th><th>Ngày bay</th><th>Day</th><th>Số CB</th><th>Ghế</th>${rHdr}</tr>`;
     const rows = data.rows.map(r => `<tr>
       <td>${r.aircraft ? r.aircraft.join(", ") : ""}</td>
       <td>${r.route || r.origin + "-" + r.destination}</td>
@@ -2880,7 +2932,7 @@ function _renderTTRows(container, data) {
       <td>${minToHHMM(r.block_time_minutes)}</td>
       <td>${r.date_range}</td><td>${r.day_of_week}</td>
       <td>${r.flight_count}</td>
-      <td>${r.total_seats || 0}</td></tr>`).join("");
+      <td>${r.total_seats || 0}</td>${rosterCells(r)}</tr>`).join("");
     container.insertAdjacentHTML("beforeend",
       `<table class="tt-table"><thead>${hdr}</thead><tbody>${rows}</tbody></table>`);
   }
@@ -4326,12 +4378,29 @@ function bindUI() {
   // Export modal
   doc("btnRunExport").addEventListener("click", runExport);
   doc("expDomIntl").addEventListener("change", () => {
-    // Re-render with existing data when dom/intl filter changes
     if (state.lastExportData) {
       state.lastExportData.displayMode = doc("expDisplay").value;
       renderTimetableTable(state.lastExportData);
     }
   });
+  if (doc("expAircraft")) {
+    doc("expAircraft").addEventListener("change", () => {
+      if (state.lastExportData) {
+        state.lastExportData.displayMode = doc("expDisplay").value;
+        renderTimetableTable(state.lastExportData);
+      }
+    });
+  }
+  if (doc("btnToggleRosterCols")) {
+    doc("btnToggleRosterCols").addEventListener("click", () => {
+      state._rosterColsVisible = !state._rosterColsVisible;
+      doc("btnToggleRosterCols").classList.toggle("active", state._rosterColsVisible);
+      if (state.lastExportData) {
+        state.lastExportData.displayMode = doc("expDisplay").value;
+        renderTimetableTable(state.lastExportData);
+      }
+    });
+  }
   doc("btnDownloadTT").addEventListener("click", () => {
     if (state.lastExportData) downloadJSON(state.lastExportData, "timetable.json");
     else alert("Hãy xem trước rồi tải.");
@@ -4419,6 +4488,28 @@ function bindUI() {
   _bindTableSearch("searchBT", "btTableBody");
   _bindTableSearch("searchAirport", "airportTableBody");
   _bindTableSearch("searchReg", "regTableBody");
+  _bindTableSearch("searchRoster", "rosterTableBody");
+
+  // Roster Rule buttons
+  if (doc("btnAddRoster")) {
+    doc("btnAddRoster").addEventListener("click", () => {
+      doc("rosterRuleId").value = "";
+      doc("rosterFdpFrom").value = "";
+      doc("rosterFdpTo").value = "";
+      doc("rosterFdp12").value = "";
+      doc("rosterFdp3").value = "";
+      doc("rosterFdp4").value = "";
+      doc("rosterFdp5").value = "";
+      doc("rosterFdp6").value = "";
+      doc("rosterFdp7").value = "";
+      doc("rosterSignOn").value = 60;
+      doc("rosterSignOff").value = 30;
+      doc("rosterNoCrewSet").value = 1;
+      doc("rosterFormTitle").textContent = "Thêm Roster Rule";
+      doc("rosterFormModal").classList.remove("hidden");
+    });
+  }
+  if (doc("btnSaveRoster")) doc("btnSaveRoster").addEventListener("click", saveRosterRule);
 }
 
 // ─── Note modal ──────────────────────────────────────────────────────────────
@@ -4649,6 +4740,129 @@ window.openSwapModal        = openSwapModal;
 window.openPasteModal       = openPasteModal;
 window.openNoteModal        = openNoteModal;
 window.deleteRouteColor     = deleteRouteColor;
+window.editRosterRule       = editRosterRule;
+window.deleteRosterRule     = deleteRosterRule;
+
+// ─── Roster Rule CRUD ────────────────────────────────────────────────────────
+async function renderRosterTable() {
+  const rules = await API.getRosterRules().catch(() => []);
+  const tbody = doc("rosterTableBody");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+  for (const r of rules) {
+    const fdpStr = (min) => min != null ? minToHHMM(min) : "—";
+    tbody.insertAdjacentHTML("beforeend", `<tr>
+      <td>${r.fdp_start_from}</td>
+      <td>${r.fdp_start_to}</td>
+      <td>${fdpStr(r.max_fdp_1_2)}</td>
+      <td>${fdpStr(r.max_fdp_3)}</td>
+      <td>${fdpStr(r.max_fdp_4)}</td>
+      <td>${fdpStr(r.max_fdp_5)}</td>
+      <td>${fdpStr(r.max_fdp_6)}</td>
+      <td>${fdpStr(r.max_fdp_7)}</td>
+      <td class="admin-only">
+        <button class="btn btn-secondary btn-sm" onclick="editRosterRule(${r.id})">Sửa</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteRosterRule(${r.id})">Xoá</button>
+      </td>
+    </tr>`);
+  }
+  state._rosterRules = rules;
+}
+
+async function editRosterRule(id) {
+  const rules = state._rosterRules || await API.getRosterRules().catch(() => []);
+  const r = rules.find(x => x.id === id);
+  if (!r) return;
+  doc("rosterRuleId").value = r.id;
+  doc("rosterFdpFrom").value = r.fdp_start_from;
+  doc("rosterFdpTo").value = r.fdp_start_to;
+  doc("rosterFdp12").value = r.max_fdp_1_2 != null ? minToHHMM(r.max_fdp_1_2) : "";
+  doc("rosterFdp3").value  = r.max_fdp_3  != null ? minToHHMM(r.max_fdp_3)  : "";
+  doc("rosterFdp4").value  = r.max_fdp_4  != null ? minToHHMM(r.max_fdp_4)  : "";
+  doc("rosterFdp5").value  = r.max_fdp_5  != null ? minToHHMM(r.max_fdp_5)  : "";
+  doc("rosterFdp6").value  = r.max_fdp_6  != null ? minToHHMM(r.max_fdp_6)  : "";
+  doc("rosterFdp7").value  = r.max_fdp_7  != null ? minToHHMM(r.max_fdp_7)  : "";
+  doc("rosterSignOn").value  = r.sign_on_minutes;
+  doc("rosterSignOff").value = r.sign_off_minutes;
+  doc("rosterNoCrewSet").value = r.no_crew_set;
+  doc("rosterFormTitle").textContent = "Chỉnh sửa Roster Rule";
+  doc("rosterFormModal").classList.remove("hidden");
+}
+
+async function deleteRosterRule(id) {
+  if (!confirm("Xoá roster rule này?")) return;
+  await API.deleteRosterRule(id).catch(e => { alert("Lỗi: " + e.message); return; });
+  await renderRosterTable();
+}
+
+async function saveRosterRule() {
+  const id = doc("rosterRuleId").value;
+  const parseOpt = (v) => v.trim() ? timeToMin(v) : null;
+  const payload = {
+    fdp_start_from: doc("rosterFdpFrom").value.trim(),
+    fdp_start_to:   doc("rosterFdpTo").value.trim(),
+    max_fdp_1_2:    parseOpt(doc("rosterFdp12").value),
+    max_fdp_3:      parseOpt(doc("rosterFdp3").value),
+    max_fdp_4:      parseOpt(doc("rosterFdp4").value),
+    max_fdp_5:      parseOpt(doc("rosterFdp5").value),
+    max_fdp_6:      parseOpt(doc("rosterFdp6").value),
+    max_fdp_7:      parseOpt(doc("rosterFdp7").value),
+    sign_on_minutes:  parseInt(doc("rosterSignOn").value) || 60,
+    sign_off_minutes: parseInt(doc("rosterSignOff").value) || 30,
+    no_crew_set:      parseInt(doc("rosterNoCrewSet").value) || 1,
+  };
+  if (!payload.fdp_start_from || !payload.fdp_start_to) {
+    alert("Vui lòng nhập khoảng thời gian FDP."); return;
+  }
+  try {
+    if (id) await API.updateRosterRule(parseInt(id), payload);
+    else    await API.createRosterRule(payload);
+    doc("rosterFormModal").classList.add("hidden");
+    await renderRosterTable();
+  } catch (e) { alert("Lỗi: " + e.message); }
+}
+
+// ─── Roster column helpers ────────────────────────────────────────────────────
+
+/** Build AC label map: {registration → "AC1", "AC2", ...} sorted by line_order */
+function _buildAcMap() {
+  const acs = (state.aircraft || []).filter(a => a.registration_id);
+  acs.sort((a, b) => (a.line_order || 0) - (b.line_order || 0));
+  const map = {};
+  acs.forEach((a, i) => { map[a.registration] = `AC${i + 1}`; });
+  return map;
+}
+
+/** Look up the applicable roster rule for a given FDP start time (HH:MM local) and sector count.
+ *  Returns the roster rule object or null. */
+function _getRosterRule(fdpStartHHMM, sectorCount) {
+  const rules = state._rosterRules || [];
+  const startMin = timeToMin(fdpStartHHMM);
+  for (const r of rules) {
+    const from = timeToMin(r.fdp_start_from);
+    let   to   = timeToMin(r.fdp_start_to);
+    // Handle overnight bands (e.g. 17:00 – 04:59)
+    let matches;
+    if (to < from) {
+      matches = startMin >= from || startMin <= to;
+    } else {
+      matches = startMin >= from && startMin <= to;
+    }
+    if (matches) return r;
+  }
+  return null;
+}
+
+/** Get max FDP minutes for a given rule and sector count */
+function _maxFdpForCount(rule, count) {
+  if (!rule) return null;
+  if (count <= 2) return rule.max_fdp_1_2;
+  if (count === 3) return rule.max_fdp_3;
+  if (count === 4) return rule.max_fdp_4;
+  if (count === 5) return rule.max_fdp_5;
+  if (count === 6) return rule.max_fdp_6;
+  return rule.max_fdp_7;
+}
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", init);

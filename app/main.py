@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .database import engine, SessionLocal
-from .models import Base, Airport, BlockTimeRule, TATRule, Registration, User
+from .models import Base, Airport, BlockTimeRule, TATRule, Registration, User, RosterRule
 from .routers import aircraft, sectors, rules, export, auth as auth_router
 from .routers import seasons as seasons_router, maintenance as maintenance_router, audit as audit_router
 from .routers import notes as notes_router
@@ -92,6 +92,36 @@ def seed_defaults():
                 db.add(TATRule(station="__DOMESTIC__", min_tat_minutes=40))
             if not db.query(TATRule).filter(TATRule.station == "__INTL__").first():
                 db.add(TATRule(station="__INTL__", min_tat_minutes=60))
+            db.commit()
+
+        # Roster rules – seed IATA FDP table if empty
+        if db.query(RosterRule).count() == 0:
+            def t(hhmm):
+                h, m = map(int, hhmm.split(":"))
+                return h * 60 + m
+            # (fdp_from, fdp_to, 1-2, 3, 4, 5, 6, 7)
+            roster_data = [
+                ("06:00", "13:29", t("13:00"), t("12:30"), t("12:00"), t("11:30"), t("11:00"), t("10:30")),
+                ("13:30", "13:59", t("12:45"), t("12:15"), t("11:45"), t("11:15"), t("10:45"), t("10:15")),
+                ("14:00", "14:29", t("12:30"), t("12:00"), t("11:30"), t("11:00"), t("10:30"), t("10:00")),
+                ("14:30", "14:59", t("12:15"), t("11:45"), t("11:15"), t("10:45"), t("10:15"),  t("9:45")),
+                ("15:00", "15:29", t("12:00"), t("11:30"), t("11:00"), t("10:30"), t("10:00"),  t("9:30")),
+                ("15:30", "15:59", t("11:45"), t("11:15"), t("10:45"), t("10:15"),  t("9:45"),  t("9:15")),
+                ("16:00", "16:29", t("11:30"), t("11:00"), t("10:30"), t("10:00"),  t("9:30"),  t("9:00")),
+                ("16:30", "16:59", t("11:15"), t("10:45"), t("10:15"),  t("9:45"),  t("9:15"),  t("9:00")),
+                ("17:00", "04:59", t("11:00"), t("10:30"), t("10:00"),  t("9:30"),  t("9:00"),  t("9:00")),
+                ("05:00", "05:14", t("12:00"), t("11:30"), t("11:00"), t("10:30"), t("10:00"),  t("9:30")),
+                ("05:15", "05:29", t("12:15"), t("11:45"), t("11:15"), t("10:45"), t("10:15"),  t("9:45")),
+                ("05:30", "05:44", t("12:30"), t("12:00"), t("11:30"), t("11:00"), t("10:30"), t("10:00")),
+                ("05:45", "05:59", t("12:45"), t("12:15"), t("11:45"), t("11:15"), t("10:45"), t("10:15")),
+            ]
+            for fdp_from, fdp_to, f12, f3, f4, f5, f6, f7 in roster_data:
+                db.add(RosterRule(
+                    fdp_start_from=fdp_from, fdp_start_to=fdp_to,
+                    max_fdp_1_2=f12, max_fdp_3=f3, max_fdp_4=f4,
+                    max_fdp_5=f5, max_fdp_6=f6, max_fdp_7=f7,
+                    sign_on_minutes=60, sign_off_minutes=30, no_crew_set=1
+                ))
             db.commit()
     finally:
         db.close()
@@ -335,6 +365,28 @@ def _migrate_db():
             conn.commit()
         except Exception:
             pass  # Column already exists
+
+        # Create roster_rules table
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS roster_rules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    fdp_start_from VARCHAR(5) NOT NULL,
+                    fdp_start_to VARCHAR(5) NOT NULL,
+                    max_fdp_1_2 INTEGER,
+                    max_fdp_3 INTEGER,
+                    max_fdp_4 INTEGER,
+                    max_fdp_5 INTEGER,
+                    max_fdp_6 INTEGER,
+                    max_fdp_7 INTEGER,
+                    sign_on_minutes INTEGER NOT NULL DEFAULT 60,
+                    sign_off_minutes INTEGER NOT NULL DEFAULT 30,
+                    no_crew_set INTEGER NOT NULL DEFAULT 1
+                )
+            """))
+            conn.commit()
+        except Exception:
+            pass
 
         # Add is_domestic column to airports table
         try:

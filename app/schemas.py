@@ -311,3 +311,27 @@ class RouteColorOut(RouteColorBase):
     id: int
     enabled: bool = True
     model_config = {"from_attributes": True}
+
+
+# ── Roster Rule ────────────────────────────────────────────────────────────────
+class RosterRuleBase(BaseModel):
+    fdp_start_from: str
+    fdp_start_to: str
+    max_fdp_1_2: Optional[int] = None
+    max_fdp_3: Optional[int] = None
+    max_fdp_4: Optional[int] = None
+    max_fdp_5: Optional[int] = None
+    max_fdp_6: Optional[int] = None
+    max_fdp_7: Optional[int] = None
+    sign_on_minutes: int = 60
+    sign_off_minutes: int = 30
+    no_crew_set: int = 1
+
+
+class RosterRuleCreate(RosterRuleBase):
+    pass
+
+
+class RosterRuleOut(RosterRuleBase):
+    id: int
+    model_config = {"from_attributes": True}

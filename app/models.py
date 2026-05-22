@@ -144,3 +144,24 @@ class AppSetting(Base):
     __tablename__ = "app_settings"
     key = Column(String(100), primary_key=True)
     value = Column(String(500), nullable=True)
+
+
+class RosterRule(Base):
+    """Roster rules: sign-on/sign-off offsets and crew set size for a given number of sectors."""
+    __tablename__ = "roster_rules"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # FDP start-time band (local time HH:MM)
+    fdp_start_from = Column(String(5), nullable=False)   # e.g. "06:00"
+    fdp_start_to   = Column(String(5), nullable=False)   # e.g. "13:29"
+    # Max FDP in minutes for each sector count (NULL = not applicable)
+    max_fdp_1_2    = Column(Integer, nullable=True)      # 1-2 sectors
+    max_fdp_3      = Column(Integer, nullable=True)
+    max_fdp_4      = Column(Integer, nullable=True)
+    max_fdp_5      = Column(Integer, nullable=True)
+    max_fdp_6      = Column(Integer, nullable=True)
+    max_fdp_7      = Column(Integer, nullable=True)
+    # Sign-on / sign-off offsets (minutes before dep / after arr)
+    sign_on_minutes  = Column(Integer, default=60, nullable=False)   # e.g. 60 = 1h before first dep
+    sign_off_minutes = Column(Integer, default=30, nullable=False)   # e.g. 30 = 30 min after last arr
+    # Number of crew sets
+    no_crew_set      = Column(Integer, default=1, nullable=False)
