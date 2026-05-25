@@ -2616,6 +2616,8 @@ async function runExport() {
   try {
     const data = await API.exportTimetable(params);
     state.lastExportData = data;
+    data.period_start = params.period_start;
+    data.period_end   = params.period_end;
     data.displayMode = doc("expDisplay").value;   // "flat" or "grouped"
     renderTimetableTable(data);
   } catch (e) {
@@ -2701,9 +2703,9 @@ function renderTimetableTable(data) {
   // Bind sort buttons
   sortBar.querySelectorAll(".tt-sort-btn").forEach(btn => {
     btn.addEventListener("click", () => {
-      _applyTTSort(btn.dataset.sort, el, sortBar);
       sortBar.querySelectorAll(".tt-sort-btn").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
+      _applyTTSort(btn.dataset.sort, el, sortBar);
     });
   });
   // Mark default as active
@@ -2838,9 +2840,11 @@ function _sortTTRows(sorted, sortMode) {
 }
 
 function _renderTTRows(container, data) {
-  // Remove existing table if any
+  // Remove existing table and summary if any
   const oldTable = container.querySelector(".tt-table");
   if (oldTable) oldTable.remove();
+  const oldSummaryTop = container.querySelector(".roster-summary");
+  if (oldSummaryTop) oldSummaryTop.remove();
 
   const displayMode = data.displayMode || "flat";
   const showRoster = !!state._rosterColsVisible;
@@ -2848,17 +2852,104 @@ function _renderTTRows(container, data) {
   // AC label map: aircraft registration → "AC1", "AC2", ...
   const acMap = _buildAcMap();
 
-  // Precompute roster data for all rows (per-aircraft FDP/crew-set algorithm)
-  const rosterData = showRoster ? _computeRosterForRows(data.rows) : null;
+  // ── Roster eligibility checks ────────────────────────────────────────────
+  const activeSortBtn = document.querySelector("#ttSortBarContainer .tt-sort-btn.active");
+  const currentSort = activeSortBtn ? activeSortBtn.dataset.sort : "default";
+  const isSingleDate = data.period_start && data.period_end
+    ? data.period_start === data.period_end
+    : new Set((data.rows || []).map(r => r.flight_date).filter(Boolean)).size === 1;
+  const isDefaultSort = currentSort === "default";
 
-  // Roster extra header cells
-  const rHdr = showRoster
-    ? `<th class="roster-col">AC</th><th class="roster-col">Flight Time</th><th class="roster-col">Sign On</th><th class="roster-col">Sign Off</th><th class="roster-col">FDP</th><th class="roster-col">Crew Set</th>`
+  // rosterBlocked: roster button is ON but conditions not met → show warning, hide cols
+  let rosterBlockReason = "";
+  if (showRoster && !isSingleDate) rosterBlockReason = "Không thể tính Roster: vui lòng chọn cùng một ngày (Từ ngày = Đến ngày).";
+  else if (showRoster && !isDefaultSort) rosterBlockReason = "Không thể tính Roster: vui lòng chọn chế độ sắp xếp Mặc định (Tàu → Chặng).";
+
+  const isDailyRoster = showRoster && !rosterBlockReason && data.mode === "daily";
+
+  // For daily-roster mode, sort rows by (aircraft_reg, dep_display) so crew sets are consecutive
+  let displayRows = data.rows;
+  if (isDailyRoster) {
+    displayRows = [...data.rows].sort((a, b) => {
+      const ac = (a.aircraft_reg || "").localeCompare(b.aircraft_reg || "");
+      if (ac !== 0) return ac;
+      return timeToMin(a.dep_display || "00:00") - timeToMin(b.dep_display || "00:00");
+    });
+  }
+
+  // Compute per-row roster data (pair-step FDP algorithm)
+  const rosterData = showRoster ? _computeRosterForRows(displayRows) : null;
+
+  // ── Build rowspan spans for daily-roster mode ──────────────────────────────
+  // spans[i] = { rowspan, isFirst, totalBlock, info, reg }
+  // rowspan=0 means this row's roster cells are covered by a previous rowspan → emit nothing
+  const spans = [];
+  if (isDailyRoster && rosterData) {
+    let i = 0;
+    while (i < displayRows.length) {
+      const r = displayRows[i];
+      const info = rosterData[i];
+      const reg = r.aircraft_reg || "";
+      if (!info || !reg) {
+        spans.push({ rowspan: 1, isFirst: true, totalBlock: r.block_time_minutes || 0, info: null, reg });
+        i++;
+        continue;
+      }
+      // Find consecutive run with same (aircraft_reg, crewSet)
+      let j = i + 1;
+      while (j < displayRows.length) {
+        const ij = rosterData[j];
+        if (!ij || displayRows[j].aircraft_reg !== reg || ij.crewSet !== info.crewSet) break;
+        j++;
+      }
+      const runLen = j - i;
+      let totalBlock = 0;
+      for (let k = i; k < j; k++) totalBlock += (displayRows[k].block_time_minutes || 0);
+      spans.push({ rowspan: runLen, isFirst: true, totalBlock, info, reg });
+      for (let k = i + 1; k < j; k++) {
+        spans.push({ rowspan: 0, isFirst: false, totalBlock: 0, info, reg });
+      }
+      i = j;
+    }
+  }
+
+  // Roster extra header cells — Crew Set first so grouping is visually clear
+  // When blocked, hide all roster columns
+  const rHdr = (showRoster && !rosterBlockReason)
+    ? `<th class="roster-col">Crew Set</th><th class="roster-col">AC</th><th class="roster-col">Flight Time</th><th class="roster-col">Sign On</th><th class="roster-col">Sign Off</th><th class="roster-col">FDP</th>`
     : "";
 
-  /** Build roster cells for a row using precomputed roster info. */
+  /** Emit warning banner if roster is blocked */
+  function maybeRosterWarning() {
+    if (rosterBlockReason) {
+      container.insertAdjacentHTML("beforeend",
+        `<div class="roster-warning">${rosterBlockReason}</div>`);
+    }
+  }
+
+  /** Build roster cells.  For daily-roster mode uses pre-built spans (with rowspan + merged block time).
+   *  For other modes falls back to per-row estimate. */
   function rosterCells(r, idx) {
-    if (!showRoster) return "";
+    if (!showRoster || rosterBlockReason) return "";
+
+    // ── Daily mode: use spans ─────────────────────────────────────────────
+    if (spans.length > 0) {
+      const span = spans[idx];
+      if (!span || !span.isFirst) return ""; // covered by rowspan above
+      const acLabel = acMap[span.reg] || "—";
+      const flightTime = minToHHMM(span.totalBlock);
+      const rs = span.rowspan > 1 ? ` rowspan="${span.rowspan}"` : "";
+      const info = span.info;
+      if (info) {
+        const signOnTime  = minToHHMM((info.signOnMin + 1440) % 1440);
+        const signOffTime = minToHHMM(info.signOffAbsMin % 1440);
+        const fdpStr      = minToHHMM(info.fdp);
+        return `<td${rs} class="roster-col">${info.crewSet}</td><td${rs} class="roster-col">${acLabel}</td><td${rs} class="roster-col">${flightTime}</td><td${rs} class="roster-col">${signOnTime}</td><td${rs} class="roster-col">${signOffTime}</td><td${rs} class="roster-col">${fdpStr}</td>`;
+      }
+      return `<td${rs} class="roster-col">—</td><td${rs} class="roster-col">${acLabel}</td><td${rs} class="roster-col">${flightTime}</td><td${rs} class="roster-col">—</td><td${rs} class="roster-col">—</td><td${rs} class="roster-col">—</td>`;
+    }
+
+    // ── Fallback: non-daily or no span data ──────────────────────────────
     const reg = r.aircraft_reg || (r.aircraft ? r.aircraft[0] : "");
     const acLabel = acMap[reg] || "—";
     const flightTime = r.block_time_minutes ? minToHHMM(r.block_time_minutes) : "—";
@@ -2867,39 +2958,35 @@ function _renderTTRows(container, data) {
       const signOnTime  = minToHHMM((info.signOnMin + 1440) % 1440);
       const signOffTime = minToHHMM(info.signOffAbsMin % 1440);
       const fdpStr      = minToHHMM(info.fdp);
-      return `<td class="roster-col">${acLabel}</td><td class="roster-col">${flightTime}</td><td class="roster-col">${signOnTime}</td><td class="roster-col">${signOffTime}</td><td class="roster-col">${fdpStr}</td><td class="roster-col">${info.noCrewSet}</td>`;
+      return `<td class="roster-col">${info.crewSet}</td><td class="roster-col">${acLabel}</td><td class="roster-col">${flightTime}</td><td class="roster-col">${signOnTime}</td><td class="roster-col">${signOffTime}</td><td class="roster-col">${fdpStr}</td>`;
     }
-    // Fallback for non-daily rows (grouped/flat without per-sector detail)
     const rule = _getRosterRule(r.dep_display || r.dep_utc || "06:00", 1);
-    const signOnMin = rule ? rule.sign_on_minutes : 60;
-    const signOffMin = rule ? rule.sign_off_minutes : 30;
+    const soMin = rule ? rule.sign_on_minutes : 60;
+    const sfMin = rule ? rule.sign_off_minutes : 30;
     const depMin = timeToMin(r.dep_display || r.dep_utc || "00:00");
     const arrMin_ = timeToMin(r.arr_display || r.arr_utc || "00:00");
-    const signOnTime  = minToHHMM((depMin - signOnMin + 1440) % 1440);
-    const signOffTime = minToHHMM((arrMin_ + signOffMin) % 1440);
-    let fdpMin = (arrMin_ + signOffMin) - (depMin - signOnMin);
+    const signOnTime  = minToHHMM((depMin - soMin + 1440) % 1440);
+    const signOffTime = minToHHMM((arrMin_ + sfMin) % 1440);
+    let fdpMin = (arrMin_ + sfMin) - (depMin - soMin);
     if (fdpMin < 0) fdpMin += 1440;
-    const fdpStr = minToHHMM(fdpMin);
-    const noCrewSet = rule ? rule.no_crew_set : 1;
-    return `<td class="roster-col">${acLabel}</td><td class="roster-col">${flightTime}</td><td class="roster-col">${signOnTime}</td><td class="roster-col">${signOffTime}</td><td class="roster-col">${fdpStr}</td><td class="roster-col">${noCrewSet}</td>`;
+    return `<td class="roster-col">1</td><td class="roster-col">${acLabel}</td><td class="roster-col">${flightTime}</td><td class="roster-col">${signOnTime}</td><td class="roster-col">${signOffTime}</td><td class="roster-col">${minToHHMM(fdpMin)}</td>`;
   }
 
   if (displayMode === "grouped") {
+    maybeRosterWarning();
     // ── Grouped display: route shown once, sub-rows for each flight ──
-    const sorted = _sortTTRows([...data.rows], "route");
+    const sorted = _sortTTRows([...displayRows], "route");
     const hdr = `<tr>
       <th>Tàu</th><th>Chặng bay</th><th>Chuyến</th>
       <th>Cất (${data.timezone})</th><th>Hạ (${data.timezone})</th>
       <th>Block</th><th>Ngày bay</th><th>Day</th><th>Số CB</th><th>Ghế</th>${rHdr}</tr>`;
     let rowsHtml = "";
     let lastRoute = "";
-    let rowIdx = 0;
-    for (const r of sorted) {
+    sorted.forEach((r, idx) => {
       const route = r.route || (r.origin + "-" + r.destination);
       const showRoute = route !== lastRoute;
       lastRoute = route;
       const acDisplay = r.aircraft_reg || (r.aircraft ? r.aircraft.join(", ") : "");
-      const origIdx = data.rows.indexOf(r);
       rowsHtml += `<tr>
         <td>${acDisplay}</td>
         <td style="font-weight:${showRoute ? "bold" : "normal"}">${showRoute ? route : ""}</td>
@@ -2909,17 +2996,48 @@ function _renderTTRows(container, data) {
         <td>${r.date_range || r.flight_date || ""}</td>
         <td>${r.day_of_week || ""}</td>
         <td>${r.flight_count || 1}</td>
-        <td>${r.total_seats || r.seats || 0}</td>${rosterCells(r, origIdx >= 0 ? origIdx : rowIdx)}</tr>`;
-      rowIdx++;
-    }
+        <td>${r.total_seats || r.seats || 0}</td>${rosterCells(r, idx)}</tr>`;
+    });
     container.insertAdjacentHTML("beforeend",
       `<table class="tt-table"><thead>${hdr}</thead><tbody>${rowsHtml}</tbody></table>`);
   } else if (data.mode === "daily") {
+    // ── Roster summary boxes (rendered BEFORE the table) ─────────────────────
+    if (isDailyRoster && spans.length > 0) {
+      const csStats = {};
+      for (const span of spans) {
+        if (span.isFirst && span.info) {
+          const cs = span.info.crewSet;
+          if (!csStats[cs]) csStats[cs] = { ft: 0, fdp: span.info.fdp };
+          csStats[cs].ft += span.totalBlock;
+        }
+      }
+      const csCount  = Object.keys(csStats).length;
+      const totalFT  = Object.values(csStats).reduce((s, v) => s + v.ft,  0);
+      const totalFDP = Object.values(csStats).reduce((s, v) => s + v.fdp, 0);
+      const avgFT    = csCount > 0 ? Math.round(totalFT / csCount) : 0;
+      container.insertAdjacentHTML("beforeend",
+        `<div class="roster-summary">
+          <div class="roster-stat-box">
+            <div class="roster-stat-label">Average FT</div>
+            <div class="roster-stat-value">${minToHHMM(avgFT)}</div>
+          </div>
+          <div class="roster-stat-box">
+            <div class="roster-stat-label">Số Crew Set</div>
+            <div class="roster-stat-value">${csCount}</div>
+          </div>
+          <div class="roster-stat-box">
+            <div class="roster-stat-label">Tổng FDP</div>
+            <div class="roster-stat-value">${minToHHMM(totalFDP)}</div>
+          </div>
+        </div>`);
+    } else {
+      maybeRosterWarning();
+    }
     const hdr = `<tr>
       <th>Tàu</th><th>Chặng bay</th><th>Chuyến</th>
       <th>Cất (${data.timezone})</th><th>Hạ (${data.timezone})</th>
       <th>Block</th><th>Ngày bay</th><th>Day</th><th>Số CB</th><th>Ghế</th>${rHdr}</tr>`;
-    const rows = data.rows.map((r, idx) => `<tr>
+    const rowsHtml = displayRows.map((r, idx) => `<tr>
       <td>${r.aircraft_reg}</td>
       <td>${r.route || r.origin + "-" + r.destination}</td>
       <td>${r.flight_number || ""}</td>
@@ -2929,13 +3047,13 @@ function _renderTTRows(container, data) {
       <td>${r.flight_count || 1}</td>
       <td>${r.total_seats || 0}</td>${rosterCells(r, idx)}</tr>`).join("");
     container.insertAdjacentHTML("beforeend",
-      `<table class="tt-table"><thead>${hdr}</thead><tbody>${rows}</tbody></table>`);
+      `<table class="tt-table"><thead>${hdr}</thead><tbody>${rowsHtml}</tbody></table>`);
   } else {
     const hdr = `<tr>
       <th>Tàu</th><th>Chặng bay</th><th>Chuyến</th>
       <th>Cất (${data.timezone})</th><th>Hạ (${data.timezone})</th>
       <th>Block</th><th>Ngày bay</th><th>Day</th><th>Số CB</th><th>Ghế</th>${rHdr}</tr>`;
-    const rows = data.rows.map((r, idx) => `<tr>
+    const rowsHtml = displayRows.map((r, idx) => `<tr>
       <td>${r.aircraft ? r.aircraft.join(", ") : ""}</td>
       <td>${r.route || r.origin + "-" + r.destination}</td>
       <td>${r.flight_number || ""}</td>
@@ -2945,7 +3063,7 @@ function _renderTTRows(container, data) {
       <td>${r.flight_count}</td>
       <td>${r.total_seats || 0}</td>${rosterCells(r, idx)}</tr>`).join("");
     container.insertAdjacentHTML("beforeend",
-      `<table class="tt-table"><thead>${hdr}</thead><tbody>${rows}</tbody></table>`);
+      `<table class="tt-table"><thead>${hdr}</thead><tbody>${rowsHtml}</tbody></table>`);
   }
 }
 
@@ -4403,9 +4521,13 @@ function bindUI() {
     });
   }
   if (doc("btnToggleRosterCols")) {
-    doc("btnToggleRosterCols").addEventListener("click", () => {
+    doc("btnToggleRosterCols").addEventListener("click", async () => {
       state._rosterColsVisible = !state._rosterColsVisible;
       doc("btnToggleRosterCols").classList.toggle("active", state._rosterColsVisible);
+      // Ensure roster rules are loaded before calculating
+      if (state._rosterColsVisible && (!state._rosterRules || state._rosterRules.length === 0)) {
+        state._rosterRules = await API.getRosterRules().catch(() => []);
+      }
       if (state.lastExportData) {
         state.lastExportData.displayMode = doc("expDisplay").value;
         renderTimetableTable(state.lastExportData);
@@ -4894,21 +5016,22 @@ function _getSignOffOffset(station) {
 }
 
 /** Compute crew-set assignments for a set of sectors belonging to one aircraft.
+ *  Processes sectors in PAIRS. After adding each pair the FDP is checked against
+ *  the roster rule (using the crew-set sign-on time and cumulative sector count).
+ *  If FDP exceeds the limit the crew set is closed at the PREVIOUS pair boundary,
+ *  and a new crew set starts at the current pair.
+ *  All sectors in a crew set share the same sign-on / sign-off / FDP values.
  *  @param {Array} sectors - row objects sorted by dep_display ascending
  *  @returns {Array} parallel array of { crewSet, signOnMin, signOffAbsMin, fdp, noCrewSet }
  */
 function _computeCrewSetsForAircraft(sectors) {
   if (!sectors.length) return [];
-  const result = new Array(sectors.length);
 
   function depStation(r) { return r.origin || (r.route && r.route.split("-")[0]) || ""; }
   function arrStation(r) { return r.destination || (r.route && r.route.split("-")[1]) || ""; }
 
-  let crewSet = 1;
-  let setStart = 0;
-
-  function computeForSet(setFirstSec, lastSec, sectorCountInSet) {
-    const rawSignOn = timeToMin(setFirstSec.dep_display || "06:00") - _getSignOnOffset(depStation(setFirstSec));
+  function evalSet(firstSec, lastSec, sectorCount) {
+    const rawSignOn = timeToMin(firstSec.dep_display || "06:00") - _getSignOnOffset(depStation(firstSec));
     const signOnMin = (rawSignOn + 1440) % 1440;
     const depMin = timeToMin(lastSec.dep_display || "06:00");
     let arrMin = timeToMin(lastSec.arr_display || "06:00");
@@ -4916,35 +5039,67 @@ function _computeCrewSetsForAircraft(sectors) {
     const signOffAbsMin = arrMin + _getSignOffOffset(arrStation(lastSec));
     let fdp = signOffAbsMin - signOnMin;
     if (fdp < 0) fdp += 1440;
-    const rule = _getRosterRule(minToHHMM(signOnMin), sectorCountInSet);
-    return { signOnMin, signOffAbsMin, fdp, rule, maxFdp: _maxFdpForCount(rule, sectorCountInSet) };
+    const rule = _getRosterRule(minToHHMM(signOnMin), sectorCount);
+    return { signOnMin, signOffAbsMin, fdp, rule, maxFdp: _maxFdpForCount(rule, sectorCount) };
   }
 
-  for (let i = 0; i < sectors.length; i++) {
-    const sectorCountInSet = i - setStart + 1;
-    const { signOnMin, signOffAbsMin, fdp, rule, maxFdp } = computeForSet(sectors[setStart], sectors[i], sectorCountInSet);
+  const n = sectors.length;
+  const result = new Array(n);
 
-    // If FDP exceeds the limit for this many sectors (and we're not alone in this set), start a new crew set
-    if (maxFdp !== null && fdp > maxFdp && sectorCountInSet > 1) {
+  let crewSet = 1;
+  let setStart = 0;
+  let lastGoodInfo = null;
+  let pairStart = 0;
+
+  while (pairStart < n) {
+    const pairEnd = Math.min(pairStart + 1, n - 1);
+    const sectorCount = pairEnd - setStart + 1;
+    const info = evalSet(sectors[setStart], sectors[pairEnd], sectorCount);
+    const exceedsFDP = info.maxFdp !== null && info.fdp > info.maxFdp;
+
+    if (exceedsFDP && pairStart > setStart) {
+      for (let i = setStart; i < pairStart; i++) {
+        result[i] = { crewSet,
+          signOnMin: lastGoodInfo.signOnMin, signOffAbsMin: lastGoodInfo.signOffAbsMin,
+          fdp: lastGoodInfo.fdp, noCrewSet: lastGoodInfo.rule ? lastGoodInfo.rule.no_crew_set : 1 };
+      }
       crewSet++;
-      setStart = i;
-      // Recompute for single-sector new set
-      const r2 = computeForSet(sectors[i], sectors[i], 1);
-      result[i] = { crewSet, signOnMin: r2.signOnMin, signOffAbsMin: r2.signOffAbsMin, fdp: r2.fdp, noCrewSet: r2.rule ? r2.rule.no_crew_set : 1 };
+      setStart = pairStart;
+      lastGoodInfo = null;
     } else {
-      result[i] = { crewSet, signOnMin, signOffAbsMin, fdp, noCrewSet: rule ? rule.no_crew_set : 1 };
+      lastGoodInfo = info;
+      pairStart += 2;
     }
   }
+
+  if (lastGoodInfo) {
+    for (let i = setStart; i < n; i++) {
+      result[i] = { crewSet,
+        signOnMin: lastGoodInfo.signOnMin, signOffAbsMin: lastGoodInfo.signOffAbsMin,
+        fdp: lastGoodInfo.fdp, noCrewSet: lastGoodInfo.rule ? lastGoodInfo.rule.no_crew_set : 1 };
+    }
+  } else {
+    const info = evalSet(sectors[setStart], sectors[n - 1], n - setStart);
+    for (let i = setStart; i < n; i++) {
+      result[i] = { crewSet,
+        signOnMin: info.signOnMin, signOffAbsMin: info.signOffAbsMin,
+        fdp: info.fdp, noCrewSet: info.rule ? info.rule.no_crew_set : 1 };
+    }
+  }
+
   return result;
 }
 
 /** Compute roster info for all rows in a timetable (daily mode).
  *  Groups by aircraft_reg, sorts by dep time, computes crew sets.
+ *  Crew Set numbers are GLOBAL — continuous across all ACs in line_order.
+ *  FDP / Sign On / Sign Off are computed first in isolation, then crewSet offset applied.
  *  @returns {Array} parallel array to rows; each element is roster info or null */
 function _computeRosterForRows(rows) {
+  // Guard: if roster rules not loaded, skip calculation
+  if (!state._rosterRules || state._rosterRules.length === 0) return new Array(rows.length).fill(null);
   const out = new Array(rows.length).fill(null);
 
-  // Group by aircraft_reg
   const groups = {};
   rows.forEach((r, idx) => {
     const reg = r.aircraft_reg || "";
@@ -4953,13 +5108,35 @@ function _computeRosterForRows(rows) {
     groups[reg].push({ r, idx });
   });
 
+  // --- Phase 1: v53 calculation per AC (FDP/Sign On/Sign Off untouched) ---
+  const perAC = {};
   for (const reg of Object.keys(groups)) {
     const items = [...groups[reg]].sort((a, b) =>
       timeToMin(a.r.dep_display || "00:00") - timeToMin(b.r.dep_display || "00:00")
     );
-    const crewResults = _computeCrewSetsForAircraft(items.map(it => it.r));
-    items.forEach((it, i) => { out[it.idx] = crewResults[i]; });
+    perAC[reg] = { items, crewResults: _computeCrewSetsForAircraft(items.map(it => it.r)) };
   }
+
+  // --- Phase 2: apply global offset to crewSet only ---
+  const orderedRegs = (state.aircraft || [])
+    .filter(a => a.registration_id && perAC[a.registration])
+    .sort((a, b) => (a.line_order || 0) - (b.line_order || 0))
+    .map(a => a.registration);
+  for (const reg of Object.keys(perAC)) {
+    if (!orderedRegs.includes(reg)) orderedRegs.push(reg);
+  }
+
+  let offset = 0;
+  for (const reg of orderedRegs) {
+    const { items, crewResults } = perAC[reg];
+    let maxLocal = 0;
+    crewResults.forEach(cr => { if (cr && cr.crewSet > maxLocal) maxLocal = cr.crewSet; });
+    items.forEach((it, i) => {
+      if (crewResults[i]) out[it.idx] = { ...crewResults[i], crewSet: crewResults[i].crewSet + offset };
+    });
+    offset += maxLocal;
+  }
+
   return out;
 }
 

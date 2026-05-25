@@ -1369,6 +1369,43 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
 }
 .tt-table tr:hover td { background: var(--bg-surface2); }
 
+.roster-summary {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 0;
+}
+.roster-stat-box {
+  flex: 1;
+  background: var(--bg-dark);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 12px;
+  text-align: center;
+}
+.roster-stat-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  margin-bottom: 2px;
+}
+.roster-stat-value {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.02em;
+}
+.roster-warning {
+  font-size: 12px;
+  color: #f4b942;
+  background: rgba(244,185,66,0.08);
+  border: 1px solid rgba(244,185,66,0.3);
+  border-radius: 6px;
+  padding: 6px 12px;
+  margin-bottom: 8px;
+}
+
 .report-summary {
   background: var(--bg-dark);
   border: 1px solid var(--border);
