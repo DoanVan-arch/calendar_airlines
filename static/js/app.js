@@ -184,12 +184,15 @@ function downloadExcel(data, filename) {
       };
       if (rosterRows) {
         const rd = rosterRows[i];
-        row["Crew Set"]    = rd ? rd.crewSet   : "";
-        row["AC"]          = rd ? rd.acLabel   : "";
-        row["Flight Time"] = rd ? rd.ft        : "";
-        row["Sign On"]     = rd ? rd.signOn    : "";
-        row["Sign Off"]    = rd ? rd.signOff   : "";
-        row["FDP"]         = rd ? rd.fdp       : "";
+        row["Crew Set"]    = rd ? rd.crewSet      : "";
+        row["AC"]          = rd ? rd.acLabel      : "";
+        row["Flight Time"] = rd ? rd.ft           : "";
+        row["Sign On"]     = rd ? rd.signOn       : "";
+        row["Sign Off"]    = rd ? rd.signOff      : "";
+        row["FDP"]         = rd ? rd.fdp          : "";
+        row["Duty Time"]   = rd ? rd.dutyTime     : "";
+        row["Type"]        = rd ? rd.crewRestType : "";
+        row["Crew Rest"]   = rd ? rd.crewRest     : "";
       }
       rows.push(row);
     }
@@ -2928,22 +2931,41 @@ function _renderTTRows(container, data) {
   // Roster extra header cells — Crew Set first so grouping is visually clear
   // When blocked, hide all roster columns
   const rHdr = (showRoster && !rosterBlockReason)
-    ? `<th class="roster-col">Crew Set</th><th class="roster-col">AC</th><th class="roster-col">Flight Time</th><th class="roster-col">Sign On</th><th class="roster-col">Sign Off</th><th class="roster-col">FDP</th>`
+    ? `<th class="roster-col">Crew Set</th><th class="roster-col">AC</th><th class="roster-col">Flight Time</th><th class="roster-col">Sign On</th><th class="roster-col">Sign Off</th><th class="roster-col">FDP</th><th class="roster-col">Duty Time</th><th class="roster-col">Type</th><th class="roster-col">Crew Rest</th>`
     : "";
 
   // Cache flat per-row roster data for Excel export
-  // Each entry: { crewSet, acLabel, ft, signOn, signOff, fdp } or null
+  // Each entry: { crewSet, acLabel, ft, signOn, signOff, fdp, dutyTime, crewRestType, crewRest } or null
   if (isDailyRoster && spans.length > 0) {
     state._lastRosterRows = spans.map((sp, i) => {
       if (!sp.info) return null;
       const info = sp.info;
+      // dutyTime = signOff - signOn (minutes)
+      let dutyMin = info.signOffAbsMin - info.signOnMin;
+      if (dutyMin < 0) dutyMin += 1440;
+      // base vs out-base
+      const isBase = info.firstOrigin && info.lastDest
+        ? info.firstOrigin === info.lastDest
+        : true;  // assume base if unknown
+      // Crew Rest
+      let crewRestMin;
+      if (isBase) {
+        // base: max(dutyTime, 12h)
+        crewRestMin = Math.max(dutyMin, 720);
+      } else {
+        // out-base: clamp(dutyTime, 10h, 12h)
+        crewRestMin = Math.min(Math.max(dutyMin, 600), 720);
+      }
       return {
-        crewSet: info.crewSet,
-        acLabel: acMap[displayRows[i] && displayRows[i].aircraft_reg] || displayRows[i].aircraft_reg || "",
-        ft:      minToHHMM(sp.totalBlock),
-        signOn:  info.signOn  != null ? minToHHMM(info.signOn)  : "",
-        signOff: info.signOff != null ? minToHHMM(info.signOff) : "",
-        fdp:     info.fdp     != null ? minToHHMM(info.fdp)     : "",
+        crewSet:      info.crewSet,
+        acLabel:      acMap[displayRows[i] && displayRows[i].aircraft_reg] || (displayRows[i] && displayRows[i].aircraft_reg) || "",
+        ft:           minToHHMM(sp.totalBlock),
+        signOn:       minToHHMM((info.signOnMin + 1440) % 1440),
+        signOff:      minToHHMM(info.signOffAbsMin % 1440),
+        fdp:          minToHHMM(info.fdp),
+        dutyTime:     minToHHMM(dutyMin),
+        crewRestType: isBase ? "Base" : "Out-base",
+        crewRest:     minToHHMM(crewRestMin),
       };
     });
   } else {
@@ -2975,9 +2997,16 @@ function _renderTTRows(container, data) {
         const signOnTime  = minToHHMM((info.signOnMin + 1440) % 1440);
         const signOffTime = minToHHMM(info.signOffAbsMin % 1440);
         const fdpStr      = minToHHMM(info.fdp);
-        return `<td${rs} class="roster-col">${info.crewSet}</td><td${rs} class="roster-col">${acLabel}</td><td${rs} class="roster-col">${flightTime}</td><td${rs} class="roster-col">${signOnTime}</td><td${rs} class="roster-col">${signOffTime}</td><td${rs} class="roster-col">${fdpStr}</td>`;
+        let dutyMin = info.signOffAbsMin - info.signOnMin;
+        if (dutyMin < 0) dutyMin += 1440;
+        const dutyStr = minToHHMM(dutyMin);
+        const isBase = info.firstOrigin && info.lastDest ? info.firstOrigin === info.lastDest : true;
+        const crewRestMin = isBase ? Math.max(dutyMin, 720) : Math.min(Math.max(dutyMin, 600), 720);
+        const crewRestStr = minToHHMM(crewRestMin);
+        const crewRestType = isBase ? "Base" : "Out-base";
+        return `<td${rs} class="roster-col">${info.crewSet}</td><td${rs} class="roster-col">${acLabel}</td><td${rs} class="roster-col">${flightTime}</td><td${rs} class="roster-col">${signOnTime}</td><td${rs} class="roster-col">${signOffTime}</td><td${rs} class="roster-col">${fdpStr}</td><td${rs} class="roster-col">${dutyStr}</td><td${rs} class="roster-col roster-col-type">${crewRestType}</td><td${rs} class="roster-col">${crewRestStr}</td>`;
       }
-      return `<td${rs} class="roster-col">—</td><td${rs} class="roster-col">${acLabel}</td><td${rs} class="roster-col">${flightTime}</td><td${rs} class="roster-col">—</td><td${rs} class="roster-col">—</td><td${rs} class="roster-col">—</td>`;
+      return `<td${rs} class="roster-col">—</td><td${rs} class="roster-col">${acLabel}</td><td${rs} class="roster-col">${flightTime}</td><td${rs} class="roster-col">—</td><td${rs} class="roster-col">—</td><td${rs} class="roster-col">—</td><td${rs} class="roster-col">—</td><td${rs} class="roster-col">—</td><td${rs} class="roster-col">—</td>`;
     }
 
     // ── Fallback: non-daily or no span data ──────────────────────────────
@@ -2989,7 +3018,12 @@ function _renderTTRows(container, data) {
       const signOnTime  = minToHHMM((info.signOnMin + 1440) % 1440);
       const signOffTime = minToHHMM(info.signOffAbsMin % 1440);
       const fdpStr      = minToHHMM(info.fdp);
-      return `<td class="roster-col">${info.crewSet}</td><td class="roster-col">${acLabel}</td><td class="roster-col">${flightTime}</td><td class="roster-col">${signOnTime}</td><td class="roster-col">${signOffTime}</td><td class="roster-col">${fdpStr}</td>`;
+      let dutyMin = info.signOffAbsMin - info.signOnMin;
+      if (dutyMin < 0) dutyMin += 1440;
+      const dutyStr = minToHHMM(dutyMin);
+      const isBase = info.firstOrigin && info.lastDest ? info.firstOrigin === info.lastDest : true;
+      const crewRestMin = isBase ? Math.max(dutyMin, 720) : Math.min(Math.max(dutyMin, 600), 720);
+      return `<td class="roster-col">${info.crewSet}</td><td class="roster-col">${acLabel}</td><td class="roster-col">${flightTime}</td><td class="roster-col">${signOnTime}</td><td class="roster-col">${signOffTime}</td><td class="roster-col">${fdpStr}</td><td class="roster-col">${dutyStr}</td><td class="roster-col roster-col-type">${isBase ? "Base" : "Out-base"}</td><td class="roster-col">${minToHHMM(crewRestMin)}</td>`;
     }
     const rule = _getRosterRule(r.dep_display || r.dep_utc || "06:00", 1);
     const soMin = rule ? rule.sign_on_minutes : 60;
@@ -3000,7 +3034,9 @@ function _renderTTRows(container, data) {
     const signOffTime = minToHHMM((arrMin_ + sfMin) % 1440);
     let fdpMin = (arrMin_ + sfMin) - (depMin - soMin);
     if (fdpMin < 0) fdpMin += 1440;
-    return `<td class="roster-col">1</td><td class="roster-col">${acLabel}</td><td class="roster-col">${flightTime}</td><td class="roster-col">${signOnTime}</td><td class="roster-col">${signOffTime}</td><td class="roster-col">${minToHHMM(fdpMin)}</td>`;
+    const dutyStr2 = minToHHMM(fdpMin);
+    const crewRestMin2 = Math.max(fdpMin, 720);
+    return `<td class="roster-col">1</td><td class="roster-col">${acLabel}</td><td class="roster-col">${flightTime}</td><td class="roster-col">${signOnTime}</td><td class="roster-col">${signOffTime}</td><td class="roster-col">${minToHHMM(fdpMin)}</td><td class="roster-col">${dutyStr2}</td><td class="roster-col roster-col-type">Base</td><td class="roster-col">${minToHHMM(crewRestMin2)}</td>`;
   }
 
   if (displayMode === "grouped") {
@@ -5115,6 +5151,26 @@ function _computeCrewSetsForAircraft(sectors) {
       result[i] = { crewSet,
         signOnMin: info.signOnMin, signOffAbsMin: info.signOffAbsMin,
         fdp: info.fdp, noCrewSet: info.rule ? info.rule.no_crew_set : 1 };
+    }
+  }
+
+  // Post-pass: annotate each entry with firstOrigin / lastDest of its crew set
+  // (needed to determine base vs out-base for Crew Rest calculation)
+  const csMap = {};   // crewSet → { firstOrigin, lastDest }
+  for (let i = 0; i < n; i++) {
+    const entry = result[i];
+    if (!entry) continue;
+    const cs = entry.crewSet;
+    if (!csMap[cs]) {
+      csMap[cs] = { firstOrigin: depStation(sectors[i]), lastDest: arrStation(sectors[i]) };
+    } else {
+      csMap[cs].lastDest = arrStation(sectors[i]);
+    }
+  }
+  for (let i = 0; i < n; i++) {
+    if (result[i] && csMap[result[i].crewSet]) {
+      result[i].firstOrigin = csMap[result[i].crewSet].firstOrigin;
+      result[i].lastDest    = csMap[result[i].crewSet].lastDest;
     }
   }
 
