@@ -167,8 +167,10 @@ function downloadExcel(data, filename) {
       });
     }
   } else if (data.mode === "daily") {
-    for (const r of filteredRows) {
-      rows.push({
+    const rosterRows = state._lastRosterRows;
+    for (let i = 0; i < filteredRows.length; i++) {
+      const r = filteredRows[i];
+      const row = {
         "Tàu":              r.aircraft_reg,
         "Chặng bay":        r.route || (r.origin + "-" + r.destination),
         "Chuyến":           r.flight_number || "",
@@ -179,7 +181,17 @@ function downloadExcel(data, filename) {
         "Day":              r.day_of_week || "",
         "Số CB":            r.flight_count || 1,
         "Ghế":              r.total_seats || 0,
-      });
+      };
+      if (rosterRows) {
+        const rd = rosterRows[i];
+        row["Crew Set"]    = rd ? rd.crewSet   : "";
+        row["AC"]          = rd ? rd.acLabel   : "";
+        row["Flight Time"] = rd ? rd.ft        : "";
+        row["Sign On"]     = rd ? rd.signOn    : "";
+        row["Sign Off"]    = rd ? rd.signOff   : "";
+        row["FDP"]         = rd ? rd.fdp       : "";
+      }
+      rows.push(row);
     }
   } else {
     // group mode (flat display)
@@ -2918,6 +2930,25 @@ function _renderTTRows(container, data) {
   const rHdr = (showRoster && !rosterBlockReason)
     ? `<th class="roster-col">Crew Set</th><th class="roster-col">AC</th><th class="roster-col">Flight Time</th><th class="roster-col">Sign On</th><th class="roster-col">Sign Off</th><th class="roster-col">FDP</th>`
     : "";
+
+  // Cache flat per-row roster data for Excel export
+  // Each entry: { crewSet, acLabel, ft, signOn, signOff, fdp } or null
+  if (isDailyRoster && spans.length > 0) {
+    state._lastRosterRows = spans.map((sp, i) => {
+      if (!sp.info) return null;
+      const info = sp.info;
+      return {
+        crewSet: info.crewSet,
+        acLabel: acMap[displayRows[i] && displayRows[i].aircraft_reg] || displayRows[i].aircraft_reg || "",
+        ft:      minToHHMM(sp.totalBlock),
+        signOn:  info.signOn  != null ? minToHHMM(info.signOn)  : "",
+        signOff: info.signOff != null ? minToHHMM(info.signOff) : "",
+        fdp:     info.fdp     != null ? minToHHMM(info.fdp)     : "",
+      };
+    });
+  } else {
+    state._lastRosterRows = null;
+  }
 
   /** Emit warning banner if roster is blocked */
   function maybeRosterWarning() {
