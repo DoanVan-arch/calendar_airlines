@@ -319,22 +319,25 @@ def get_warnings(
         """Get required TAT (minutes) with transition support.
         Transition TAT (DOM→INTL or INTL→DOM) takes priority over station-specific rules,
         because the type change requires a different handling regardless of the station.
+        Unknown airports default to domestic to avoid false positives.
         """
+        def is_dom(code):
+            if not code:
+                return True  # assume domestic if unknown
+            return airport_dom.get(code, True)  # default domestic
+
         # Check transition first: inbound leg is domestic only if BOTH endpoints are domestic
         if prev_origin and prev_dest and next_origin and next_dest:
-            inbound_dom  = airport_dom.get(prev_origin, True) and airport_dom.get(prev_dest, True)
-            outbound_dom = airport_dom.get(next_origin, True) and airport_dom.get(next_dest, True)
+            inbound_dom  = is_dom(prev_origin) and is_dom(prev_dest)
+            outbound_dom = is_dom(next_origin) and is_dom(next_dest)
             if inbound_dom != outbound_dom:
                 return default_tat_dom_to_intl if (inbound_dom and not outbound_dom) else default_tat_intl_to_dom
         # Station-specific rule
         if station in tat_map:
             return tat_map[station]
         # Fallback: station-based domestic/intl default
-        is_dom = airport_dom.get(station, True)
-        return default_tat_domestic if is_dom else default_tat_intl
-        # Fallback: station-based
-        is_dom = airport_dom.get(station, True)
-        return default_tat_domestic if is_dom else default_tat_intl
+        is_domestic = is_dom(station)
+        return default_tat_domestic if is_domestic else default_tat_intl
     # Build curfew lookup: {code: (open, close)} — only airports with curfew set
     airport_curfew = {}
     for ap in db.query(Airport).all():

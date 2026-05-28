@@ -613,20 +613,20 @@ class GanttChart {
     let reqTAT;
     const mass = state.massTAT || { domestic: 40, international: 60, dom_to_intl: 60, intl_to_dom: 60 };
     // Check for transition TAT first (previous leg type ≠ next leg type)
-    // A flight is domestic only if BOTH endpoints are domestic
-    const apPrevOrig = state.airports && state.airports[prev.origin];
-    const apPrevDest = state.airports && state.airports[prev.destination];
-    const apNextOrig = state.airports && state.airports[next.origin];
-    const apNextDest = state.airports && state.airports[next.destination];
-    const inboundDom = apPrevOrig && apPrevDest && apPrevOrig.is_domestic && apPrevDest.is_domestic;
-    const outboundDom = apNextOrig && apNextDest && apNextOrig.is_domestic && apNextDest.is_domestic;
+    // A flight is domestic only if BOTH endpoints are domestic.
+    // Unknown airports (not in state.airports) default to domestic to avoid false positives.
+    function apIsDom(code) {
+      const ap = state.airports && state.airports[code];
+      return ap ? !!ap.is_domestic : true;  // default domestic if unknown
+    }
+    const inboundDom  = apIsDom(prev.origin) && apIsDom(prev.destination);
+    const outboundDom = apIsDom(next.origin) && apIsDom(next.destination);
     if (inboundDom !== outboundDom) {
       reqTAT = inboundDom ? (mass.dom_to_intl || mass.international) : (mass.intl_to_dom || mass.domestic);
     } else if (state.tatRules && state.tatRules[dest]) {
       reqTAT = state.tatRules[dest].min_tat_minutes;
     } else {
-      const ap = state.airports && state.airports[dest];
-      const isDomestic = ap && ap.is_domestic;
+      const isDomestic = apIsDom(dest);
       reqTAT = isDomestic ? mass.domestic : mass.international;
     }
 

@@ -1541,15 +1541,18 @@ function _parseChainRoutes() {
 function _getTATForStation(station, prevOrigin, nextDest) {
   const mass = state.massTAT || { domestic: 40, international: 60, dom_to_intl: 60, intl_to_dom: 60 };
 
+  // Helper: unknown airports default to domestic to avoid false positives
+  function apIsDom(code) {
+    const ap = state.airports && state.airports[code];
+    return ap ? !!ap.is_domestic : true;
+  }
+
   // 1. Transition TAT takes priority (INTL→DOM or DOM→INTL)
   // prevOrigin = origin of inbound leg, station = turnaround, nextDest = destination of outbound
   // A flight is domestic only if BOTH endpoints are domestic
   if (prevOrigin && nextDest) {
-    const apPrevOrig = state.airports && state.airports[prevOrigin];
-    const apStation  = state.airports && state.airports[station];
-    const apNextDest = state.airports && state.airports[nextDest];
-    const inboundDom  = apPrevOrig && apStation && apPrevOrig.is_domestic && apStation.is_domestic;
-    const outboundDom = apStation  && apNextDest && apStation.is_domestic  && apNextDest.is_domestic;
+    const inboundDom  = apIsDom(prevOrigin) && apIsDom(station);
+    const outboundDom = apIsDom(station)    && apIsDom(nextDest);
     if (inboundDom !== outboundDom) {
       if (inboundDom && !outboundDom) return mass.dom_to_intl || mass.international;
       if (!inboundDom && outboundDom) return mass.intl_to_dom || mass.domestic;
@@ -1562,9 +1565,7 @@ function _getTATForStation(station, prevOrigin, nextDest) {
   }
 
   // 3. Fallback: station-based domestic/international mass TAT
-  const ap = state.airports && state.airports[station];
-  const isDomestic = ap && ap.is_domestic;
-  return isDomestic ? mass.domestic : mass.international;
+  return apIsDom(station) ? mass.domestic : mass.international;
 }
 
 function _buildChainPreview() {
