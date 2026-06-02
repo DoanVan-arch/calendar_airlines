@@ -2649,13 +2649,25 @@ function renderTimetableTable(data) {
   const sortContainer = doc("ttSortBarContainer");
   sortContainer.innerHTML = "";
   const sortBar = document.createElement("div");
-  sortBar.style.cssText = "margin:8px 0;display:flex;gap:6px;align-items:center;";
+  sortBar.style.cssText = "margin:8px 0;display:flex;gap:6px;align-items:center;flex-wrap:wrap;";
+  const overrideCount = Object.keys(state._crewSetOverrides || {}).length;
+  const overrideBadge = overrideCount > 0
+    ? `<span class="tt-override-badge" title="Có gán Crew Set thủ công">${overrideCount} gán thủ công</span>
+       <button class="btn btn-danger btn-sm" id="btnClearAllOverrides">✕ Xóa tất cả gán</button>`
+    : "";
   sortBar.innerHTML = `
     <span style="font-size:11px;color:var(--text-muted);">Sắp xếp:</span>
     <button class="btn btn-secondary btn-sm tt-sort-btn" data-sort="default">Mặc định (Tàu → Chặng)</button>
     <button class="btn btn-secondary btn-sm tt-sort-btn" data-sort="route">Theo đường bay</button>
+    ${overrideBadge}
   `;
   sortContainer.appendChild(sortBar);
+  if (overrideCount > 0) {
+    sortBar.querySelector("#btnClearAllOverrides").addEventListener("click", () => {
+      state._crewSetOverrides = {};
+      renderTimetableTable(state.lastExportData);
+    });
+  }
 
   // Store original data for re-sorting / re-filtering
   state._ttDisplayData = data;
@@ -2894,7 +2906,12 @@ function _renderTTRows(container, data) {
   }
 
   // Compute per-row roster data (pair-step FDP algorithm)
-  const rosterData = showRoster ? _computeRosterForRows(displayRows) : null;
+  let rosterData = showRoster ? _computeRosterForRows(displayRows) : null;
+
+  // Apply any manual crew-set overrides on top of auto-computed data
+  if (isDailyRoster && rosterData && state._crewSetOverrides && Object.keys(state._crewSetOverrides).length > 0) {
+    rosterData = applyCrewSetOverrides(displayRows, rosterData, state._crewSetOverrides);
+  }
 
   // ── Build rowspan spans for daily-roster mode ──────────────────────────────
   // spans[i] = { rowspan, isFirst, totalBlock, info, reg }
@@ -3105,7 +3122,9 @@ function _renderTTRows(container, data) {
       <th>Tàu</th><th>Chặng bay</th><th>Chuyến</th>
       <th>Cất (${data.timezone})</th><th>Hạ (${data.timezone})</th>
       <th>Block</th><th>Ngày bay</th><th>Day</th><th>Số CB</th><th>Ghế</th>${rHdr}</tr>`;
-    const rowsHtml = displayRows.map((r, idx) => `<tr>
+    const rowsHtml = displayRows.map((r, idx) => {
+      const isManual = state._crewSetOverrides && state._crewSetOverrides[_rowKey(r)] !== undefined;
+      return `<tr data-row-idx="${idx}" data-row-key="${_rowKey(r)}"${isManual ? ' class="tt-row-manual"' : ""}>
       <td>${r.aircraft_reg}</td>
       <td>${r.route || r.origin + "-" + r.destination}</td>
       <td>${r.flight_number || ""}</td>
@@ -3113,9 +3132,14 @@ function _renderTTRows(container, data) {
       <td>${minToHHMM(r.block_time_minutes)}</td>
       <td>${r.date_range || r.flight_date || ""}</td><td>${r.day_of_week}</td>
       <td>${r.flight_count || 1}</td>
-      <td>${r.total_seats || 0}</td>${rosterCells(r, idx)}</tr>`).join("");
+      <td>${r.total_seats || 0}</td>${rosterCells(r, idx)}</tr>`;
+    }).join("");
     container.insertAdjacentHTML("beforeend",
       `<table class="tt-table"><thead>${hdr}</thead><tbody>${rowsHtml}</tbody></table>`);
+    // Bind row selection + context menu for manual crew-set editing
+    if (isDailyRoster) {
+      _bindTTRowSelection(container, displayRows);
+    }
   } else {
     const hdr = `<tr>
       <th>Tàu</th><th>Chặng bay</th><th>Chuyến</th>
@@ -5226,6 +5250,238 @@ function _computeRosterForRows(rows) {
   }
 
   return out;
+}
+
+// ─── Manual Crew Set Override ─────────────────────────────────────────────────
+
+/** Stable key for a timetable row (used as override map key) */
+function _rowKey(r) {
+  return `${r.aircraft_reg || ""}|${r.flight_date || ""}|${r.flight_number || ""}|${r.dep_display || ""}`;
+}
+
+/**
+ * Apply manual crew-set overrides on top of auto-computed rosterData.
+ * For each unique (aircraft_reg, crewSet) group after overrides, recalculate
+ * signOnMin / signOffAbsMin / fdp / firstOrigin / lastDest from actual sectors.
+ */
+function applyCrewSetOverrides(displayRows, rosterData, overrides) {
+  // Clone rosterData entries to avoid mutating originals
+  const result = rosterData.map(r => r ? { ...r } : null);
+
+  // 1. Apply crewSet overrides
+  displayRows.forEach((r, i) => {
+    const key = _rowKey(r);
+    if (overrides[key] !== undefined) {
+      if (result[i]) {
+        result[i] = { ...result[i], crewSet: overrides[key], _manual: true };
+      } else {
+        result[i] = { crewSet: overrides[key], signOnMin: null, signOffAbsMin: null, fdp: null, _manual: true };
+      }
+    }
+  });
+
+  // 2. For each (aircraft_reg, crewSet) group, recompute timing from its actual sectors
+  const groups = {};
+  displayRows.forEach((r, i) => {
+    if (!result[i]) return;
+    const gKey = `${r.aircraft_reg || ""}|${result[i].crewSet}`;
+    if (!groups[gKey]) groups[gKey] = [];
+    groups[gKey].push(i);
+  });
+
+  for (const indices of Object.values(groups)) {
+    // Sort within group by dep time
+    const sorted = [...indices].sort((a, b) =>
+      timeToMin(displayRows[a].dep_display || "00:00") - timeToMin(displayRows[b].dep_display || "00:00")
+    );
+    const firstRow = displayRows[sorted[0]];
+    const lastRow  = displayRows[sorted[sorted.length - 1]];
+
+    // Origin / destination helpers (same as _computeCrewSetsForAircraft)
+    function dep(row) { return row.origin || (row.route && row.route.split("-")[0]) || ""; }
+    function arr(row) { return row.destination || (row.route && row.route.split("-")[1]) || ""; }
+
+    const firstOrigin = dep(firstRow);
+    const lastDest    = arr(lastRow);
+
+    // Sign on
+    const soOffset  = _getSignOnOffset(firstOrigin);
+    const depMin0   = timeToMin(firstRow.dep_display || "06:00");
+    const signOnMin = (depMin0 - soOffset + 1440) % 1440;
+
+    // Sign off (account for overnight last sector)
+    const sfOffset     = _getSignOffOffset(lastDest);
+    const lastDepMin   = timeToMin(lastRow.dep_display || "06:00");
+    let   lastArrMin   = timeToMin(lastRow.arr_display || "06:00");
+    if (lastArrMin <= lastDepMin) lastArrMin += 1440;
+    const signOffAbsMin = lastArrMin + sfOffset;
+
+    let fdp = signOffAbsMin - signOnMin;
+    if (fdp < 0) fdp += 1440;
+
+    for (const i of indices) {
+      result[i] = { ...result[i], signOnMin, signOffAbsMin, fdp, firstOrigin, lastDest };
+    }
+  }
+
+  return result;
+}
+
+// ─── Timetable Row Selection + Context Menu ───────────────────────────────────
+
+/** State for manual selections inside the timetable */
+const _ttSel = {
+  rows:    new Set(),   // selected row indices (within current displayRows)
+  lastIdx: -1,          // last clicked index for shift-range
+};
+
+function _ttClearSelection() {
+  _ttSel.rows.clear();
+  _ttSel.lastIdx = -1;
+  document.querySelectorAll(".tt-table tr.tt-selected").forEach(r => r.classList.remove("tt-selected"));
+}
+
+/** Bind click-to-select and right-click context-menu on the timetable container */
+function _bindTTRowSelection(container, displayRows) {
+  const table = container.querySelector(".tt-table");
+  if (!table) return;
+
+  // Highlight helpers
+  function applyHighlight() {
+    table.querySelectorAll("tbody tr[data-row-idx]").forEach(tr => {
+      const idx = parseInt(tr.dataset.rowIdx, 10);
+      tr.classList.toggle("tt-selected", _ttSel.rows.has(idx));
+    });
+  }
+
+  // Click on tbody rows
+  table.querySelector("tbody").addEventListener("click", e => {
+    const tr = e.target.closest("tr[data-row-idx]");
+    if (!tr) return;
+    const idx = parseInt(tr.dataset.rowIdx, 10);
+
+    if (e.shiftKey && _ttSel.lastIdx >= 0) {
+      // Range select
+      const lo = Math.min(idx, _ttSel.lastIdx);
+      const hi = Math.max(idx, _ttSel.lastIdx);
+      for (let i = lo; i <= hi; i++) _ttSel.rows.add(i);
+    } else if (e.ctrlKey || e.metaKey) {
+      // Toggle
+      if (_ttSel.rows.has(idx)) _ttSel.rows.delete(idx);
+      else _ttSel.rows.add(idx);
+    } else {
+      // Single select (if already selected and alone, deselect)
+      if (_ttSel.rows.has(idx) && _ttSel.rows.size === 1) {
+        _ttSel.rows.clear();
+        _ttSel.lastIdx = -1;
+        applyHighlight();
+        return;
+      }
+      _ttSel.rows.clear();
+      _ttSel.rows.add(idx);
+    }
+    _ttSel.lastIdx = idx;
+    applyHighlight();
+  });
+
+  // Right-click context menu
+  table.querySelector("tbody").addEventListener("contextmenu", e => {
+    const tr = e.target.closest("tr[data-row-idx]");
+    if (!tr) return;
+    e.preventDefault();
+
+    // Auto-select clicked row if not already selected
+    const idx = parseInt(tr.dataset.rowIdx, 10);
+    if (!_ttSel.rows.has(idx)) {
+      _ttSel.rows.clear();
+      _ttSel.rows.add(idx);
+      _ttSel.lastIdx = idx;
+      applyHighlight();
+    }
+
+    _showTTContextMenu(e.clientX, e.clientY, displayRows);
+  });
+}
+
+/** Show the floating context menu */
+function _showTTContextMenu(x, y, displayRows) {
+  _hideTTContextMenu();
+
+  const menu = document.createElement("div");
+  menu.id = "ttContextMenu";
+  menu.className = "tt-ctx-menu";
+
+  const selCount = _ttSel.rows.size;
+  const hasOverrides = Object.keys(state._crewSetOverrides || {}).length > 0;
+
+  // Determine current crew set of selection (if uniform)
+  let currentCS = null;
+  let uniform = true;
+  for (const idx of _ttSel.rows) {
+    const key = _rowKey(displayRows[idx]);
+    const cs  = (state._crewSetOverrides || {})[key];
+    if (currentCS === null) currentCS = cs;
+    else if (currentCS !== cs) { uniform = false; break; }
+  }
+
+  menu.innerHTML = `
+    <div class="tt-ctx-header">${selCount} dòng được chọn</div>
+    <div class="tt-ctx-item" id="ttCtxSetCS">✎ Gán Crew Set...</div>
+    ${selCount > 0 ? `<div class="tt-ctx-item tt-ctx-danger" id="ttCtxClearSel">✕ Xóa gán (dòng đã chọn)</div>` : ""}
+    ${hasOverrides ? `<div class="tt-ctx-item tt-ctx-danger" id="ttCtxClearAll">✕ Xóa tất cả gán thủ công</div>` : ""}
+  `;
+
+  document.body.appendChild(menu);
+
+  // Position — keep within viewport
+  const mw = 220, mh = menu.offsetHeight || 120;
+  menu.style.left = (x + mw > window.innerWidth  ? window.innerWidth  - mw - 8 : x) + "px";
+  menu.style.top  = (y + mh > window.innerHeight ? window.innerHeight - mh - 8 : y) + "px";
+
+  // Gán Crew Set
+  menu.querySelector("#ttCtxSetCS").addEventListener("click", () => {
+    _hideTTContextMenu();
+    const val = prompt(`Nhập số Crew Set cho ${selCount} dòng đã chọn:`, currentCS != null ? currentCS : "");
+    if (val === null || val.trim() === "") return;
+    const csNum = parseInt(val.trim(), 10);
+    if (isNaN(csNum) || csNum < 1) { alert("Số Crew Set không hợp lệ."); return; }
+
+    if (!state._crewSetOverrides) state._crewSetOverrides = {};
+    for (const idx of _ttSel.rows) {
+      state._crewSetOverrides[_rowKey(displayRows[idx])] = csNum;
+    }
+    _ttClearSelection();
+    renderTimetableTable(state.lastExportData);
+  });
+
+  // Xóa gán (dòng đã chọn)
+  const clearSelEl = menu.querySelector("#ttCtxClearSel");
+  if (clearSelEl) clearSelEl.addEventListener("click", () => {
+    _hideTTContextMenu();
+    if (!state._crewSetOverrides) return;
+    for (const idx of _ttSel.rows) {
+      delete state._crewSetOverrides[_rowKey(displayRows[idx])];
+    }
+    _ttClearSelection();
+    renderTimetableTable(state.lastExportData);
+  });
+
+  // Xóa tất cả
+  const clearAllEl = menu.querySelector("#ttCtxClearAll");
+  if (clearAllEl) clearAllEl.addEventListener("click", () => {
+    _hideTTContextMenu();
+    state._crewSetOverrides = {};
+    _ttClearSelection();
+    renderTimetableTable(state.lastExportData);
+  });
+
+  // Close on outside click
+  setTimeout(() => document.addEventListener("click", _hideTTContextMenu, { once: true }), 0);
+}
+
+function _hideTTContextMenu() {
+  const m = document.getElementById("ttContextMenu");
+  if (m) m.remove();
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────

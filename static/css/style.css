@@ -1406,6 +1406,62 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
   margin-bottom: 8px;
 }
 
+/* ── Timetable row selection & manual crew-set ──────────────────────── */
+.tt-table tbody tr[data-row-idx] {
+  cursor: pointer;
+  user-select: none;
+}
+.tt-table tbody tr.tt-selected td {
+  background: rgba(74, 144, 226, 0.22) !important;
+  outline: 1px solid rgba(74, 144, 226, 0.6);
+}
+.tt-table tbody tr.tt-row-manual td:first-child::after {
+  content: " ✎";
+  font-size: 10px;
+  color: #f4b942;
+  opacity: 0.8;
+}
+
+/* Override count badge in sort bar */
+.tt-override-badge {
+  font-size: 11px;
+  background: rgba(244,185,66,0.15);
+  border: 1px solid rgba(244,185,66,0.4);
+  color: #f4b942;
+  border-radius: 10px;
+  padding: 2px 8px;
+  margin-left: 4px;
+}
+
+/* Context menu */
+.tt-ctx-menu {
+  position: fixed;
+  z-index: 9999;
+  background: var(--bg-card, #1e2535);
+  border: 1px solid var(--border, #2e3a50);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+  min-width: 200px;
+  padding: 4px 0;
+  font-size: 13px;
+}
+.tt-ctx-header {
+  padding: 6px 14px 4px;
+  font-size: 11px;
+  color: var(--text-muted, #7a8499);
+  border-bottom: 1px solid var(--border, #2e3a50);
+  margin-bottom: 2px;
+}
+.tt-ctx-item {
+  padding: 7px 14px;
+  cursor: pointer;
+  color: var(--text-primary, #e0e6f0);
+  transition: background 0.1s;
+}
+.tt-ctx-item:hover { background: rgba(255,255,255,0.07); }
+.tt-ctx-item.tt-ctx-danger { color: #e05252; }
+.tt-ctx-item.tt-ctx-danger:hover { background: rgba(224,82,82,0.1); }
+
 .report-summary {
   background: var(--bg-dark);
   border: 1px solid var(--border);
