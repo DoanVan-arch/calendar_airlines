@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import MaintenanceBlock, Aircraft
-from ..routers.auth import get_session, require_admin
+from ..routers.auth import get_session, require_mod_or_admin
 from ..schemas import MaintenanceCreate, MaintenanceUpdate, MaintenanceOut
 
 router = APIRouter()
@@ -32,7 +32,7 @@ def list_maintenance(
 
 @router.post("/", response_model=MaintenanceOut, status_code=201)
 def create_maintenance(request: Request, payload: MaintenanceCreate, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_mod_or_admin(request)
     ac = db.query(Aircraft).filter(Aircraft.id == payload.aircraft_id).first()
     if not ac:
         raise HTTPException(404, "Aircraft not found")
@@ -48,7 +48,7 @@ def create_maintenance(request: Request, payload: MaintenanceCreate, db: Session
 
 @router.put("/{block_id}", response_model=MaintenanceOut)
 def update_maintenance(request: Request, block_id: int, payload: MaintenanceUpdate, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_mod_or_admin(request)
     block = db.query(MaintenanceBlock).filter(MaintenanceBlock.id == block_id).first()
     if not block:
         raise HTTPException(404, "Không tìm thấy block bảo dưỡng")
@@ -64,7 +64,7 @@ def update_maintenance(request: Request, block_id: int, payload: MaintenanceUpda
 
 @router.delete("/{block_id}", status_code=204)
 def delete_maintenance(request: Request, block_id: int, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_mod_or_admin(request)
     block = db.query(MaintenanceBlock).filter(MaintenanceBlock.id == block_id).first()
     if not block:
         raise HTTPException(404, "Không tìm thấy block bảo dưỡng")

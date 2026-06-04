@@ -263,6 +263,56 @@ function downloadReportExcel(data, filename) {
   XLSX.writeFile(wb, filename);
 }
 
+// ─── Modal Draggable ──────────────────────────────────────────────────────────
+function makeModalsDraggable() {
+  document.querySelectorAll('.modal').forEach(modal => {
+    const header = modal.querySelector('.modal-header');
+    if (!header) return;
+    
+    let isDragging = false;
+    let currentX, currentY, initialX, initialY;
+    
+    header.addEventListener('mousedown', (e) => {
+      // Don't drag if clicking on buttons/inputs in header
+      if (e.target.closest('button') || e.target.closest('input')) return;
+      
+      isDragging = true;
+      modal.classList.add('modal-dragging');
+      
+      // Get current position
+      const rect = modal.getBoundingClientRect();
+      initialX = e.clientX - rect.left;
+      initialY = e.clientY - rect.top;
+      
+      // Switch to absolute positioning if not already
+      if (modal.style.position !== 'absolute') {
+        modal.style.position = 'absolute';
+        modal.style.left = rect.left + 'px';
+        modal.style.top = rect.top + 'px';
+        modal.style.margin = '0';
+      }
+    });
+    
+    document.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      
+      e.preventDefault();
+      currentX = e.clientX - initialX;
+      currentY = e.clientY - initialY;
+      
+      modal.style.left = currentX + 'px';
+      modal.style.top = currentY + 'px';
+    });
+    
+    document.addEventListener('mouseup', () => {
+      if (isDragging) {
+        isDragging = false;
+        modal.classList.remove('modal-dragging');
+      }
+    });
+  });
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 async function init() {
   try {
@@ -303,6 +353,7 @@ async function init() {
   await refreshView();
 
   bindUI();
+  makeModalsDraggable(); // Enable drag on all modals
   } catch (err) {
     console.error("INIT CRASH:", err);
     alert("Lỗi khởi động ứng dụng: " + err.message);
@@ -321,15 +372,19 @@ async function loadCurrentUser() {
 
 function applyRoleUI() {
   const isAdmin = state.userRole === "admin";
-  // Show/hide all .admin-only elements
+  const isMod = state.userRole === "mod";
+  const canWrite = isAdmin || isMod;
+  
+  // Show/hide all .admin-only elements (for rules, user management, etc.)
   document.querySelectorAll(".admin-only").forEach(el => {
     el.style.display = isAdmin ? "" : "none";
   });
-  // Show/hide toolbar buttons that require admin
-  const adminToolbarBtns = ["btnAddAircraft", "btnAddSector"];
-  adminToolbarBtns.forEach(id => {
+  
+  // Show/hide toolbar buttons that require write access (admin or mod)
+  const writeToolbarBtns = ["btnAddAircraft", "btnAddSector"];
+  writeToolbarBtns.forEach(id => {
     const el = doc(id);
-    if (el) el.style.display = isAdmin ? "" : "none";
+    if (el) el.style.display = canWrite ? "" : "none";
   });
 }
 
@@ -918,7 +973,7 @@ async function refreshWeekView() {
         bar.style.borderLeft = `3px solid ${mx.color || "#f59e0b"}`;
         bar.textContent = mx.label || "MX";
         bar.title = `Bảo dưỡng: ${mx.label || "Maintenance"} (${mx.start_date}→${mx.end_date})`;
-        if (state.userRole === "admin") {
+        if (state.userRole === "admin" || state.userRole === "mod") {
           bar.addEventListener("click", e => {
             e.stopPropagation();
             openMaintenanceModal(mx);
@@ -1058,7 +1113,7 @@ async function refreshMonthView() {
         bar.style.borderLeft  = `3px solid ${mx.color || "#f59e0b"}`;
         bar.title = `${ac.registration}: ${mx.label || "Maintenance"} (${mx.start_date}→${mx.end_date})`;
         bar.textContent = `${ac.registration} – ${mx.label || "MX"}`;
-        if (state.userRole === "admin") {
+        if (state.userRole === "admin" || state.userRole === "mod") {
           bar.addEventListener("click", e => {
             e.stopPropagation();
             openMaintenanceModal(mx);
@@ -1793,10 +1848,10 @@ function openAircraftModal(ac = null) {
 
   doc("aircraftModalOverlay").classList.remove("hidden");
 
-  // Show reset-sector-colors button only when editing (ac exists) and admin
+  // Show reset-sector-colors button only when editing (ac exists) and admin or mod
   const btnReset = doc("btnResetSectorColors");
   if (btnReset) {
-    const showReset = ac && state.userRole === "admin";
+    const showReset = ac && (state.userRole === "admin" || state.userRole === "mod");
     btnReset.classList.toggle("hidden", !showReset);
   }
 }
@@ -2605,10 +2660,10 @@ async function openExportModal() {
   const lastOfMonth  = dateToStr(new Date(new Date(today).getFullYear(), new Date(today).getMonth() + 1, 0));
   doc("expStart").value = firstOfMonth;
   doc("expEnd").value   = lastOfMonth;
-  // Populate aircraft combobox
+  // Populate aircraft multi-select
   const acSel = doc("expAircraft");
   if (acSel) {
-    acSel.innerHTML = '<option value="">Tất cả tàu bay</option>';
+    acSel.innerHTML = ''; // No "all" option needed for multi-select
     const acList = (state.aircraft || []).filter(a => a.registration_id); // exclude TẠM
     acList.sort((a, b) => (a.line_order || 0) - (b.line_order || 0));
     for (const ac of acList) {
@@ -2767,11 +2822,19 @@ function _applyDomIntlFilter(rows) {
 /** Apply all UI filters (dom/intl + aircraft) to rows */
 function _applyAllTTFilters(rows) {
   rows = _applyDomIntlFilter(rows);
-  const acFilter = doc("expAircraft") ? doc("expAircraft").value : "";
-  if (acFilter) rows = rows.filter(r =>
-    (r.aircraft_reg || "") === acFilter ||
-    (r.aircraft && r.aircraft.includes(acFilter))
-  );
+  
+  // Multi-select aircraft filter
+  const acSel = doc("expAircraft");
+  if (acSel) {
+    const selectedAircraft = Array.from(acSel.selectedOptions).map(o => o.value);
+    if (selectedAircraft.length > 0) {
+      rows = rows.filter(r =>
+        selectedAircraft.includes(r.aircraft_reg || "") ||
+        selectedAircraft.some(ac => (r.aircraft || "").includes(ac))
+      );
+    }
+  }
+  
   return rows;
 }
 

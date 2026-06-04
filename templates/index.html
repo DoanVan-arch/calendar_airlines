@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PikA - Pickleball Airways</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=73" />
+  <link rel="stylesheet" href="/static/css/style.css?v=75" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
 </head>
 <body>
@@ -589,12 +589,13 @@
 
 <!-- Export Timetable Modal -->
 <div class="modal-overlay hidden" id="exportModalOverlay">
-  <div class="modal modal-lg" id="exportModal">
+  <div class="modal modal-xl" id="exportModal">
     <div class="modal-header">
       <h2>Xuất Time Table</h2>
       <button class="close-btn" data-close="exportModalOverlay"><i class="fas fa-times"></i></button>
     </div>
     <div class="modal-body">
+      <!-- Row 1: Date Range and Mode -->
       <div class="form-row">
         <div class="form-group">
           <label>Từ ngày</label>
@@ -618,6 +619,10 @@
             <option value="UTC">UTC</option>
           </select>
         </div>
+      </div>
+
+      <!-- Row 2: Display and Filters -->
+      <div class="form-row">
         <div class="form-group">
           <label>Hiển thị</label>
           <select id="expDisplay">
@@ -633,20 +638,25 @@
             <option value="international">Quốc tế</option>
           </select>
         </div>
-        <div class="form-group">
+        <div class="form-group" style="flex: 2;">
           <label>Tàu bay</label>
-          <select id="expAircraft">
-            <option value="">Tất cả tàu bay</option>
+          <select id="expAircraft" multiple size="3" style="height: auto; width: 100%;">
+            <!-- Options populated dynamically -->
           </select>
+          <small style="font-size:10px;color:var(--text-muted);">Giữ Ctrl/Cmd để chọn nhiều</small>
         </div>
       </div>
-      <button class="btn btn-primary" id="btnRunExport"><i class="fas fa-search"></i> Xem</button>
-      <button class="btn btn-secondary" id="btnDownloadTT"><i class="fas fa-download"></i> Tải JSON</button>
-      <button class="btn btn-secondary" id="btnDownloadExcel"><i class="fas fa-file-excel"></i> Tải Excel</button>
-      <button class="btn btn-secondary" id="btnToggleRosterCols" title="Ẩn/hiện cột Roster"><i class="fas fa-user-clock"></i> Roster</button>
+
+      <!-- Action Buttons -->
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
+        <button class="btn btn-primary" id="btnRunExport"><i class="fas fa-search"></i> Xem</button>
+        <button class="btn btn-secondary" id="btnDownloadTT"><i class="fas fa-download"></i> Tải JSON</button>
+        <button class="btn btn-secondary" id="btnDownloadExcel"><i class="fas fa-file-excel"></i> Tải Excel</button>
+        <button class="btn btn-secondary" id="btnToggleRosterCols" title="Ẩn/hiện cột Roster"><i class="fas fa-user-clock"></i> Roster</button>
+      </div>
 
       <!-- Route filter (populated after data loads) -->
-      <div id="ttRouteFilterWrap" class="hidden" style="margin-top:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+      <div id="ttRouteFilterWrap" class="hidden" style="margin-top:12px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
         <span style="font-size:11px;color:var(--text-muted);">Lọc đường bay:</span>
         <div id="ttRouteFilterChips" style="display:flex;gap:4px;flex-wrap:wrap;"></div>
         <button class="btn btn-secondary btn-sm" id="btnTTFilterClear" style="font-size:10px;">Bỏ lọc</button>
@@ -1059,6 +1069,7 @@
         <label>Quyền <span class="required">*</span></label>
         <select id="userRole">
           <option value="viewer">Xem (Viewer)</option>
+          <option value="mod">Điều hành (Mod)</option>
           <option value="admin">Quản trị (Admin)</option>
         </select>
       </div>
@@ -1272,10 +1283,10 @@
 </div>
 
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-<script src="/static/js/api.js?v=73"></script>
-<script src="/static/js/history.js?v=73"></script>
-<script src="/static/js/gantt.js?v=73"></script>
-<script src="/static/js/app.js?v=73"></script>
+<script src="/static/js/api.js?v=75"></script>
+<script src="/static/js/history.js?v=75"></script>
+<script src="/static/js/gantt.js?v=75"></script>
+<script src="/static/js/app.js?v=75"></script>
 <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
 
 <!-- ── Format Picker Modal (Import / Export) ─────────────────────────── -->

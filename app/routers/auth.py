@@ -8,6 +8,7 @@ The first admin account is bootstrapped from environment variables:
 
 Roles:
   admin  – full read/write access
+  mod    – write access to sectors/maintenance/seasons/swaps, read-only for rules
   viewer – read-only (cannot add/edit/delete)
 
 Sessions are stored in a server-side dict (sufficient for single-process deployment).
@@ -73,7 +74,7 @@ def is_authenticated(request: Request) -> bool:
 
 
 def get_current_role(request: Request) -> str:
-    """Return 'admin'|'viewer' for authenticated users, empty string if not auth."""
+    """Return 'admin'|'mod'|'viewer' for authenticated users, empty string if not auth."""
     sess = get_session(request)
     return sess["role"] if sess else ""
 
@@ -83,6 +84,13 @@ def require_admin(request: Request) -> None:
     sess = get_session(request)
     if not sess or sess.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Chỉ admin mới có quyền thực hiện thao tác này.")
+
+
+def require_mod_or_admin(request: Request) -> None:
+    """Raise 403 if the current user is not admin or mod."""
+    sess = get_session(request)
+    if not sess or sess.get("role") not in ("admin", "mod"):
+        raise HTTPException(status_code=403, detail="Bạn không có quyền thực hiện thao tác này.")
 
 
 # ── Bootstrap first admin user ─────────────────────────────────────────────────
@@ -162,8 +170,8 @@ def list_users(request: Request, db: Session = Depends(get_db)):
 @router.post("/users", response_model=UserOut, status_code=201)
 def create_user(request: Request, payload: UserCreate, db: Session = Depends(get_db)):
     require_admin(request)
-    if payload.role not in ("admin", "viewer"):
-        raise HTTPException(400, "role phải là 'admin' hoặc 'viewer'")
+    if payload.role not in ("admin", "mod", "viewer"):
+        raise HTTPException(400, "role phải là 'admin', 'mod' hoặc 'viewer'")
     existing = db.query(User).filter(User.username == payload.username).first()
     if existing:
         raise HTTPException(400, f"Tên đăng nhập '{payload.username}' đã tồn tại")
@@ -185,8 +193,8 @@ def update_user(request: Request, user_id: int, payload: UserCreate, db: Session
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(404, "Không tìm thấy tài khoản")
-    if payload.role not in ("admin", "viewer"):
-        raise HTTPException(400, "role phải là 'admin' hoặc 'viewer'")
+    if payload.role not in ("admin", "mod", "viewer"):
+        raise HTTPException(400, "role phải là 'admin', 'mod' hoặc 'viewer'")
     # Prevent removing the last admin
     if user.role == "admin" and payload.role != "admin":
         admin_count = db.query(User).filter(User.role == "admin").count()

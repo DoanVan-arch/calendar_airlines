@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from ..database import get_db
 from ..models import FlightSector, BlockTimeRule, TATRule, Aircraft, Airport, AuditLog
 from ..schemas import FlightSectorCreate, FlightSectorUpdate, FlightSectorOut, SwapAircraftPayload, BulkCancelPayload
-from .auth import get_session
+from .auth import get_session, require_mod_or_admin
 
 router = APIRouter()
 
@@ -112,6 +112,7 @@ def list_sectors_period(
 
 @router.post("/", response_model=FlightSectorOut, status_code=201)
 def create_sector(request: Request, payload: FlightSectorCreate, db: Session = Depends(get_db)):
+    require_mod_or_admin(request)
     ac = db.query(Aircraft).filter(Aircraft.id == payload.aircraft_id).first()
     if not ac:
         raise HTTPException(404, "Aircraft not found")
@@ -127,6 +128,7 @@ def create_sector(request: Request, payload: FlightSectorCreate, db: Session = D
 
 @router.put("/{sector_id}", response_model=FlightSectorOut)
 def update_sector(request: Request, sector_id: int, payload: FlightSectorUpdate, db: Session = Depends(get_db)):
+    require_mod_or_admin(request)
     sector = db.query(FlightSector).filter(FlightSector.id == sector_id).first()
     if not sector:
         raise HTTPException(404, "Sector not found")
@@ -150,6 +152,7 @@ def update_sector(request: Request, sector_id: int, payload: FlightSectorUpdate,
 
 @router.delete("/{sector_id}", status_code=204)
 def delete_sector(request: Request, sector_id: int, db: Session = Depends(get_db)):
+    require_mod_or_admin(request)
     sector = db.query(FlightSector).filter(FlightSector.id == sector_id).first()
     if not sector:
         raise HTTPException(404, "Sector not found")
@@ -160,6 +163,7 @@ def delete_sector(request: Request, sector_id: int, db: Session = Depends(get_db
 
 @router.post("/{sector_id}/cancel", response_model=FlightSectorOut)
 def cancel_sector(request: Request, sector_id: int, db: Session = Depends(get_db)):
+    require_mod_or_admin(request)
     sector = db.query(FlightSector).filter(FlightSector.id == sector_id).first()
     if not sector:
         raise HTTPException(404, "Sector not found")
@@ -172,6 +176,7 @@ def cancel_sector(request: Request, sector_id: int, db: Session = Depends(get_db
 
 @router.post("/{sector_id}/restore", response_model=FlightSectorOut)
 def restore_sector(request: Request, sector_id: int, db: Session = Depends(get_db)):
+    require_mod_or_admin(request)
     sector = db.query(FlightSector).filter(FlightSector.id == sector_id).first()
     if not sector:
         raise HTTPException(404, "Sector not found")
@@ -185,6 +190,7 @@ def restore_sector(request: Request, sector_id: int, db: Session = Depends(get_d
 @router.post("/bulk-cancel")
 def bulk_cancel_sectors(request: Request, payload: BulkCancelPayload, db: Session = Depends(get_db)):
     """Cancel multiple sectors at once."""
+    require_mod_or_admin(request)
     results = []
     for sid in payload.sector_ids:
         sector = db.query(FlightSector).filter(FlightSector.id == sid).first()
@@ -203,6 +209,7 @@ def bulk_cancel_sectors(request: Request, payload: BulkCancelPayload, db: Sessio
 @router.post("/bulk-restore")
 def bulk_restore_sectors(request: Request, payload: BulkCancelPayload, db: Session = Depends(get_db)):
     """Restore multiple cancelled sectors at once."""
+    require_mod_or_admin(request)
     results = []
     for sid in payload.sector_ids:
         sector = db.query(FlightSector).filter(FlightSector.id == sid).first()
@@ -226,6 +233,7 @@ def swap_aircraft_sectors(request: Request, payload: SwapAircraftPayload, db: Se
     If payload.date is provided, only sectors on that date are swapped.
     Otherwise all dates are swapped.
     """
+    require_mod_or_admin(request)
     ac_a = db.query(Aircraft).filter(Aircraft.id == payload.aircraft_a_id).first()
     ac_b = db.query(Aircraft).filter(Aircraft.id == payload.aircraft_b_id).first()
     if not ac_a or not ac_b:
@@ -283,8 +291,9 @@ def swap_aircraft_sectors(request: Request, payload: SwapAircraftPayload, db: Se
 
 # ── Clear sector colors for an aircraft ────────────────────────────────────────
 @router.post("/clear-colors/aircraft/{ac_id}", status_code=200)
-def clear_sector_colors(ac_id: int, db: Session = Depends(get_db)):
+def clear_sector_colors(request: Request, ac_id: int, db: Session = Depends(get_db)):
     """Set color=NULL on all sectors of the given aircraft so they inherit ac color dynamically."""
+    require_mod_or_admin(request)
     db.query(FlightSector).filter(FlightSector.aircraft_id == ac_id).update({"color": None})
     db.commit()
     return {"ok": True}

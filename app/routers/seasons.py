@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import Season
-from ..routers.auth import require_admin
+from ..routers.auth import require_mod_or_admin
 from ..schemas import SeasonCreate, SeasonOut
 
 router = APIRouter()
@@ -82,7 +82,7 @@ def list_seasons(db: Session = Depends(get_db)):
 
 @router.post("/", response_model=SeasonOut, status_code=201)
 def create_season(request: Request, payload: SeasonCreate, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_mod_or_admin(request)
     if payload.season_type not in ("summer", "winter"):
         raise HTTPException(400, "season_type phải là 'summer' hoặc 'winter'")
     season = Season(**payload.model_dump())
@@ -94,7 +94,7 @@ def create_season(request: Request, payload: SeasonCreate, db: Session = Depends
 
 @router.put("/{season_id}", response_model=SeasonOut)
 def update_season(request: Request, season_id: int, payload: SeasonCreate, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_mod_or_admin(request)
     season = db.query(Season).filter(Season.id == season_id).first()
     if not season:
         raise HTTPException(404, "Không tìm thấy mùa")
@@ -107,7 +107,7 @@ def update_season(request: Request, season_id: int, payload: SeasonCreate, db: S
 
 @router.delete("/{season_id}", status_code=204)
 def delete_season(request: Request, season_id: int, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_mod_or_admin(request)
     season = db.query(Season).filter(Season.id == season_id).first()
     if not season:
         raise HTTPException(404, "Không tìm thấy mùa")

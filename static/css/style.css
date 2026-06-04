@@ -1005,7 +1005,7 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
   border: 1px solid var(--border);
   border-radius: 12px;
   width: 100%;
-  max-width: 540px;
+  max-width: 720px;
   max-height: 90vh;
   display: flex;
   flex-direction: column;
@@ -1013,11 +1013,16 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
   pointer-events: auto;
   position: relative;
   z-index: 1;
+  resize: both;
+  overflow: hidden;
+  min-width: 400px;
+  min-height: 250px;
 }
 
-.modal-sm { max-width: 360px; }
-.modal-md { max-width: 520px; }
-.modal-lg { max-width: 780px; }
+.modal.modal-dragging {
+  cursor: move;
+  user-select: none;
+}
 
 .modal-header {
   display: flex;
@@ -1025,7 +1030,14 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
   justify-content: space-between;
   padding: 16px 20px;
   border-bottom: 1px solid var(--border);
+  cursor: move;
+  user-select: none;
 }
+
+.modal-sm { max-width: 480px; }
+.modal-md { max-width: 720px; }
+.modal-lg { max-width: 980px; }
+.modal-xl { max-width: 1200px; }
 
 .modal-header h2 { font-size: 16px; color: var(--text-bright); }
 
