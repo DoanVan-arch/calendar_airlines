@@ -4182,6 +4182,10 @@ function openSwapModal(ac) {
   doc("swapAcAId").value   = ac.id;
   doc("swapAcAName").value = ac.registration + (ac.ac_type ? ` (${ac.ac_type})` : "");
   doc("swapDateScope").value = "day";
+  
+  // Initialize date range inputs with current date
+  doc("swapStartDate").value = state.currentDate;
+  doc("swapEndDate").value = state.currentDate;
 
   // Populate target aircraft dropdown (exclude self)
   const sel = doc("swapAcBId");
@@ -4196,13 +4200,27 @@ function openSwapModal(ac) {
 
   const updateHint = () => {
     const scope = doc("swapDateScope").value;
-    const hint = scope === "day"
-      ? `Sẽ hoán đổi tất cả chuyến bay của ${ac.registration} và tàu được chọn trong ngày ${state.currentDate}.`
-      : `Sẽ hoán đổi tất cả chuyến bay trong TOÀN BỘ lịch bay của hai tàu.`;
+    const dateRangeGroup = doc("swapDateRangeGroup");
+    
+    // Show/hide date range inputs
+    dateRangeGroup.style.display = scope === "range" ? "" : "none";
+    
+    let hint = "";
+    if (scope === "day") {
+      hint = `Sẽ hoán đổi tất cả chuyến bay của ${ac.registration} và tàu được chọn trong ngày ${state.currentDate}.`;
+    } else if (scope === "range") {
+      const start = doc("swapStartDate").value || "?";
+      const end = doc("swapEndDate").value || "?";
+      hint = `Sẽ hoán đổi tất cả chuyến bay từ ${start} đến ${end}.`;
+    } else {
+      hint = `Sẽ hoán đổi tất cả chuyến bay trong TOÀN BỘ lịch bay của hai tàu.`;
+    }
     doc("swapHintText").textContent = hint;
   };
   updateHint();
   doc("swapDateScope").onchange = updateHint;
+  doc("swapStartDate").onchange = updateHint;
+  doc("swapEndDate").onchange = updateHint;
 
   doc("swapAircraftModal").classList.remove("hidden");
 }
@@ -4210,18 +4228,54 @@ function openSwapModal(ac) {
 async function confirmSwap() {
   const acAId = parseInt(doc("swapAcAId").value, 10);
   const acBId = parseInt(doc("swapAcBId").value, 10);
-  const scope  = doc("swapDateScope").value;
-  const date   = scope === "day" ? state.currentDate : null;
+  const scope = doc("swapDateScope").value;
+  
+  let date = null;
+  let startDate = null;
+  let endDate = null;
+  
+  if (scope === "day") {
+    date = state.currentDate;
+  } else if (scope === "range") {
+    startDate = doc("swapStartDate").value;
+    endDate = doc("swapEndDate").value;
+    if (!startDate || !endDate) {
+      alert("Vui lòng chọn ngày bắt đầu và kết thúc");
+      return;
+    }
+    if (startDate > endDate) {
+      alert("Ngày bắt đầu phải trước hoặc bằng ngày kết thúc");
+      return;
+    }
+  }
 
   const acA = state.aircraft.find(a => a.id === acAId);
   const acB = state.aircraft.find(a => a.id === acBId);
   const nameA = acA ? acA.registration : acAId;
   const nameB = acB ? acB.registration : acBId;
-
-  if (!confirm(`Hoán đổi toàn bộ tuyến bay giữa ${nameA} và ${nameB}${date ? " (ngày " + date + ")" : " (tất cả ngày)"}?`)) return;
+  
+  let confirmMsg = `Hoán đổi toàn bộ tuyến bay giữa ${nameA} và ${nameB}`;
+  if (date) {
+    confirmMsg += ` (ngày ${date})`;
+  } else if (startDate && endDate) {
+    confirmMsg += ` (từ ${startDate} đến ${endDate})`;
+  } else {
+    confirmMsg += ` (tất cả ngày)`;
+  }
+  confirmMsg += "?";
+  
+  if (!confirm(confirmMsg)) return;
 
   try {
-    const result = await API.swapAircraft({ aircraft_a_id: acAId, aircraft_b_id: acBId, date });
+    const payload = { aircraft_a_id: acAId, aircraft_b_id: acBId };
+    if (date) {
+      payload.date = date;
+    } else if (startDate && endDate) {
+      payload.start_date = startDate;
+      payload.end_date = endDate;
+    }
+    
+    const result = await API.swapAircraft(payload);
     doc("swapAircraftModal").classList.add("hidden");
     await refreshGantt();
     showToast(`Đã hoán đổi: ${result.swapped_a} chuyến của ${result.aircraft_a} ↔ ${result.swapped_b} chuyến của ${result.aircraft_b}`, "success");

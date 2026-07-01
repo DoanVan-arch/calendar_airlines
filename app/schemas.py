@@ -8,7 +8,12 @@ import re
 class SwapAircraftPayload(BaseModel):
     aircraft_a_id: int
     aircraft_b_id: int
-    date: Optional[str] = None   # YYYY-MM-DD; if None → swap ALL dates
+    date: Optional[str] = None         # YYYY-MM-DD; single day swap (legacy)
+    start_date: Optional[str] = None   # YYYY-MM-DD; date range start
+    end_date: Optional[str] = None     # YYYY-MM-DD; date range end
+    # If date is provided, swap only that day
+    # If start_date and end_date are provided, swap date range
+    # If none provided, swap ALL dates
 
 
 class BulkCancelPayload(BaseModel):

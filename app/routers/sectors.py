@@ -231,6 +231,7 @@ def swap_aircraft_sectors(request: Request, payload: SwapAircraftPayload, db: Se
     """Atomically swap all flight sectors between two aircraft.
 
     If payload.date is provided, only sectors on that date are swapped.
+    If payload.start_date and end_date are provided, swap date range.
     Otherwise all dates are swapped.
     """
     require_mod_or_admin(request)
@@ -244,9 +245,17 @@ def swap_aircraft_sectors(request: Request, payload: SwapAircraftPayload, db: Se
     # Fetch sectors for each aircraft
     q_a = db.query(FlightSector).filter(FlightSector.aircraft_id == payload.aircraft_a_id)
     q_b = db.query(FlightSector).filter(FlightSector.aircraft_id == payload.aircraft_b_id)
+    
+    # Apply date filter
+    date_str = "all dates"
     if payload.date:
         q_a = q_a.filter(FlightSector.flight_date == payload.date)
         q_b = q_b.filter(FlightSector.flight_date == payload.date)
+        date_str = payload.date
+    elif payload.start_date and payload.end_date:
+        q_a = q_a.filter(FlightSector.flight_date >= payload.start_date, FlightSector.flight_date <= payload.end_date)
+        q_b = q_b.filter(FlightSector.flight_date >= payload.start_date, FlightSector.flight_date <= payload.end_date)
+        date_str = f"{payload.start_date} to {payload.end_date}"
 
     sectors_a = q_a.all()
     sectors_b = q_b.all()
@@ -267,7 +276,6 @@ def swap_aircraft_sectors(request: Request, payload: SwapAircraftPayload, db: Se
     # Audit
     sess = get_session(request)
     username = sess["username"] if sess else "system"
-    date_str = payload.date or "all dates"
     db.add(AuditLog(
         timestamp=datetime.utcnow(),
         username=username,
