@@ -51,6 +51,7 @@ def update_airport(request: Request, code: str, payload: AirportCreate, db: Sess
         raise HTTPException(404, "Airport not found")
     ap.name = payload.name
     ap.timezone_offset = payload.timezone_offset
+    ap.is_domestic = payload.is_domestic
     ap.curfew_open = payload.curfew_open
     ap.curfew_close = payload.curfew_close
     db.commit()
