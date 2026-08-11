@@ -886,7 +886,9 @@ def export_schedule(db: Session = Depends(get_db)):
     wb.save(buf)
     buf.seek(0)
 
-    filename = f"schedule_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    date_str = datetime.now().strftime('%d%b%y').upper()
+
+    filename = f"Pika_{date_str}.xlsx"
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

@@ -3322,18 +3322,33 @@ function renderReport(data) {
 }
 
 // ─── Import / Export file ─────────────────────────────────────────────────────
+// Hàm lấy ngày hiện tại và định dạng sang DDMMMYY (VD: 08AUG26)
+function getCurrentFormattedDate() {
+  const date = new Date(); // Lấy ngày giờ hiện tại của máy tính
+  
+  const day = String(date.getDate()).padStart(2, '0');
+  const monthNames = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+  const month = monthNames[date.getMonth()];
+  const year = String(date.getFullYear()).slice(-2); // Lấy 2 số cuối của năm
+  
+  return `${day}${month}${year}`;
+}
+
 async function saveScheduleFile() {
   try {
     const data = await API.exportSchedule();
-    downloadJSON(data, `schedule_${state.currentDate}.json`);
+    const dateStr = getCurrentFormattedDate(); // Tự động lấy ngày hôm nay
+    downloadJSON(data, `Pika_${dateStr}.json`);
   } catch (e) {
     alert("Lỗi xuất lịch: " + e.message);
   }
 }
+
 async function saveScheduleXLSXFile() {
   try {
     const data = await API.exportSchedule();
-    downloadXLSX(data, `schedule_${state.currentDate}.xlsx`);
+    const dateStr = getCurrentFormattedDate(); // Tự động lấy ngày hôm nay
+    downloadXLSX(data, `Pika_${dateStr}.xlsx`);
   } catch (e) {
     alert("Lỗi xuất lịch: " + e.message);
   }
@@ -3407,7 +3422,8 @@ async function _exportScheduleExcel() {
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement("a");
     a.href     = url;
-    a.download = `schedule_${state.currentDate}.xlsx`;
+    const dateStr = getCurrentFormattedDate();
+    a.download = `Pika_${dateStr}.xlsx`;
     a.click();
     URL.revokeObjectURL(url);
     showToast("Xuất Excel thành công!", "success");
@@ -3421,7 +3437,8 @@ async function _exportScheduleJSON() {
   try {
     showToast("Đang xuất file JSON...", "info");
     const data = await API.exportSchedule();
-    downloadJSON(data, `schedule_${state.currentDate}.json`);
+    const dateStr = getCurrentFormattedDate();
+    downloadJSON(data, `Pika_${dateStr}.json`);
     showToast("Xuất JSON thành công!", "success");
   } catch (e) {
     alert("Lỗi xuất JSON: " + e.message);
