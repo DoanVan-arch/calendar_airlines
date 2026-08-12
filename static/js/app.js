@@ -2509,8 +2509,11 @@ async function renderUserTable() {
     const tbody = doc("userTableBody");
     tbody.innerHTML = "";
     for (const u of users) {
-      const roleLabel = u.role === "admin"
+      const roleLabel = 
+      u.role === "admin"
         ? '<span class="tag-domestic">Admin</span>'
+        : u.role === "mod"
+        ? '<span class="tag-mod">Mod</span>' // Bạn có thể đổi class css tương ứng
         : '<span class="tag-intl">Viewer</span>';
       const isSelf = u.username === state.username;
       const tr = document.createElement("tr");
