@@ -30,6 +30,19 @@ def time_to_minutes(hhmm: str) -> int:
     return h * 60 + m
 
 
+def _parse_date(value: str) -> datetime:
+    """Parse a flight_date value into a datetime, tolerating legacy/malformed
+    values (e.g. "2026-01-15 00:00:00" or "2026-01-15T00:00:00") that may have
+    been stored by older/buggy import code instead of the expected plain
+    "YYYY-MM-DD" string."""
+    text = str(value).strip()
+    if " " in text:
+        text = text.split(" ")[0]
+    if "T" in text:
+        text = text.split("T")[0]
+    return datetime.strptime(text, "%Y-%m-%d")
+
+
 def block_time_minutes(dep: str, arr: str) -> int:
     d, a = time_to_minutes(dep), time_to_minutes(arr)
     if a < d:
@@ -495,7 +508,7 @@ def get_warnings(
         # and the earliest next sector (any date after today) for this aircraft.
         # This handles gaps of 2+ days between sectors.
 
-        current_date_obj = datetime.strptime(date, "%Y-%m-%d")
+        current_date_obj = _parse_date(date)
 
         if sectors:
             # --- Previous sector → today's first sector ---
@@ -512,7 +525,7 @@ def get_warnings(
 
             if prev_sector:
                 first_today = sectors[0]
-                prev_date_obj = datetime.strptime(prev_sector.flight_date, "%Y-%m-%d")
+                prev_date_obj = _parse_date(prev_sector.flight_date)
                 day_diff = (current_date_obj - prev_date_obj).days  # always >= 1
 
                 # TAT gap: arrival on prev_date → departure on current date
@@ -569,7 +582,7 @@ def get_warnings(
 
             if next_sector:
                 last_today = sectors[-1]
-                next_date_obj = datetime.strptime(next_sector.flight_date, "%Y-%m-%d")
+                next_date_obj = _parse_date(next_sector.flight_date)
                 day_diff = (next_date_obj - current_date_obj).days  # always >= 1
 
                 # Base mismatch: today's last destination ≠ next sector origin

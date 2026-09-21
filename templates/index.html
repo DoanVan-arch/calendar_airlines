@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PikA - Pickleball Airways</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=76" />
+  <link rel="stylesheet" href="/static/css/style.css?v=78" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
 </head>
 <body>
@@ -41,9 +41,9 @@
       <button class="tz-btn"        id="btnViewWeek"  data-view="week">Tuần</button>
       <button class="tz-btn"        id="btnViewMonth" data-view="month">Tháng</button>
     </div>
-    <a class="btn-demo-link" href="https://calendarairline-demo.up.railway.app/" target="_blank" rel="noopener">
+    <!-- <a class="btn-demo-link" href="https://calendarairline-demo.up.railway.app/" target="_blank" rel="noopener">
       <i class="fas fa-external-link-alt"></i> Bản Demo
-    </a>
+    </a> -->
   </div>
 
   <div class="header-actions">
@@ -51,6 +51,7 @@
       <button class="tz-btn active" id="btnLCT">LCT</button>
       <button class="tz-btn" id="btnUTC">UTC</button>
     </div>
+    <select id="dbSwitcher" class="db-switcher" title="Chọn cơ sở dữ liệu"></select>
     <button class="icon-btn" id="btnLogout" title="Đăng xuất"><i class="fas fa-sign-out-alt"></i></button>
   </div>
 </header>
@@ -393,6 +394,7 @@
         
         <button class="tab-btn admin-only" data-tab="tabSeasons">Mùa bay</button>
         <button class="tab-btn admin-only" data-tab="tabUsers">Người dùng</button>
+        <button class="tab-btn admin-only" data-tab="tabDatabases">Cơ sở dữ liệu</button>
         <button class="tab-btn" data-tab="tabRoster">Roster</button>
       </div>
 
@@ -497,6 +499,20 @@
         <table class="data-table" id="userTable">
           <thead><tr><th>Tên đăng nhập</th><th>Tên hiển thị</th><th>Quyền</th><th></th></tr></thead>
           <tbody id="userTableBody"></tbody>
+        </table>
+      </div>
+      </div>
+
+      <!-- Databases tab (admin only) -->
+      <div class="tab-content" id="tabDatabases">
+        <div class="table-toolbar">
+          <button class="btn btn-success btn-sm" id="btnAddDatabase"><i class="fas fa-plus"></i> Thêm database</button>
+          <span id="databaseLimitInfo" style="font-size:12px; color: var(--text-muted, #8b949e); margin-left: 8px;"></span>
+        </div>
+         <div class="table-wrapper">
+        <table class="data-table" id="databaseTable">
+          <thead><tr><th>Tên</th><th>File</th><th>Loại</th><th>Bảo vệ</th><th></th></tr></thead>
+          <tbody id="databaseTableBody"></tbody>
         </table>
       </div>
       </div>
@@ -1088,6 +1104,49 @@
   </div>
 </div>
 
+<div class="modal-overlay hidden" id="databaseFormModal">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2 id="databaseFormTitle">Thêm database</h2>
+      <button class="close-btn" data-close="databaseFormModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="databaseId" />
+      <div class="form-group">
+        <label>Tên database <span class="required">*</span></label>
+        <input type="text" id="databaseName" placeholder="vd: Demo bay quốc tế" />
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="databaseFormModal">Huỷ</button>
+      <button class="btn btn-primary" id="btnSaveDatabase">Lưu</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="databasePasswordModal">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2 id="databasePasswordTitle">Đặt mật khẩu database</h2>
+      <button class="close-btn" data-close="databasePasswordModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="databasePasswordId" />
+      <p style="color: var(--text-muted, #8b949e); font-size: 12px; margin-bottom: 12px;">
+        Người dùng sẽ phải nhập đúng mật khẩu này khi chọn hoặc chuyển sang database này, để tránh dùng chung không kiểm soát.
+      </p>
+      <div class="form-group">
+        <label>Mật khẩu mới <span class="required">*</span></label>
+        <input type="password" id="databasePasswordValue" placeholder="Nhập mật khẩu" autocomplete="new-password" />
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="databasePasswordModal">Huỷ</button>
+      <button class="btn btn-primary" id="btnSaveDatabasePassword">Lưu mật khẩu</button>
+    </div>
+  </div>
+</div>
+
 <!-- Footer -->
 <footer class="app-footer">
   <div class="footer-inner">
@@ -1290,10 +1349,10 @@
 </div>
 
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-<script src="/static/js/api.js?v=76"></script>
-<script src="/static/js/history.js?v=76"></script>
-<script src="/static/js/gantt.js?v=76"></script>
-<script src="/static/js/app.js?v=76"></script>
+<script src="/static/js/api.js?v=78"></script>
+<script src="/static/js/history.js?v=78"></script>
+<script src="/static/js/gantt.js?v=78"></script>
+<script src="/static/js/app.js?v=78"></script>
 <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
 
 <!-- ── Format Picker Modal (Import / Export) ─────────────────────────── -->

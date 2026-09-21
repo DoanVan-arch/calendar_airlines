@@ -349,6 +349,7 @@ async function init() {
   updateDateLabel();
 
   await loadCurrentUser();
+  await loadDatabaseSwitcher();
   await loadReferenceData();
   await refreshView();
 
@@ -366,8 +367,48 @@ async function loadCurrentUser() {
     const me = await fetch("/api/auth/me").then(r => r.json());
     state.userRole = me.role || "viewer";
     state.username = me.username || "";
+    state.currentDbFilename = me.db_filename || "";
     applyRoleUI();
   } catch {}
+}
+
+// ─── Database switcher (all roles) ───────────────────────────────────────────
+async function loadDatabaseSwitcher() {
+  try {
+    const dbs = await fetch("/api/auth/databases").then(r => r.json());
+    state.databases = dbs;
+    const sel = doc("dbSwitcher");
+    if (!sel) return;
+    sel.innerHTML = "";
+    for (const d of dbs) {
+      const opt = document.createElement("option");
+      opt.value = d.id;
+      opt.textContent = d.is_default ? `${d.name} (mặc định)` : d.name;
+      if (d.filename === state.currentDbFilename) opt.selected = true;
+      sel.appendChild(opt);
+    }
+  } catch {}
+}
+
+async function switchDatabase(databaseId) {
+  const dbInfo = (state.databases || []).find(d => String(d.id) === String(databaseId));
+  let db_password = null;
+  if (dbInfo && dbInfo.has_password) {
+    db_password = prompt(`Nhập mật khẩu cho cơ sở dữ liệu "${dbInfo.name}":`);
+    if (db_password === null) { await loadDatabaseSwitcher(); return; } // cancelled
+  }
+  try {
+    const res = await fetch("/api/auth/select-database", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ database_id: parseInt(databaseId, 10), db_password }),
+    });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || "Lỗi"); }
+    window.location.reload();
+  } catch (err) {
+    alert("Lỗi: " + err.message);
+    await loadDatabaseSwitcher();
+  }
 }
 
 function applyRoleUI() {
@@ -2137,7 +2178,7 @@ async function openRulesModal() {
     renderRosterTable(),
   ]);
   if (state.userRole === "admin") {
-    await Promise.all([renderUserTable(), renderSeasonTable()]);
+    await Promise.all([renderUserTable(), renderSeasonTable(), renderDatabaseTable()]);
   }
 }
 
@@ -2357,6 +2398,18 @@ async function exportTATExcel() {
   window.location.href = "/api/rules/tat/export";
 }
 
+// ─── Shared helper for Excel import result feedback ──────────────────────────
+function reportImportResult(label, result) {
+  const errs = result.errors || [];
+  let msg = `Đã nhập ${result.imported} ${label} từ Excel.`;
+  if (errs.length) {
+    msg += `\n\n${errs.length} dòng bị bỏ qua do lỗi:\n` +
+      errs.slice(0, 20).map(e => `- Dòng ${e.row}: ${e.error}`).join("\n");
+    if (errs.length > 20) msg += `\n... và ${errs.length - 20} dòng khác`;
+  }
+  alert(msg);
+}
+
 async function importTATExcel(e) {
   const file = e.target.files[0];
   if (!file) return;
@@ -2369,9 +2422,9 @@ async function importTATExcel(e) {
       method: "POST",
       body: formData
     });
-    if (!response.ok) throw new Error("Import failed");
-    const result = await response.json();
-    alert(`Đã nhập ${result.imported} TAT rules từ Excel`);
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.detail || "Import failed");
+    reportImportResult("TAT rules", result);
     await renderTATTable();
   } catch (err) {
     alert("Lỗi: " + err.message);
@@ -2396,9 +2449,9 @@ async function importBTExcel(e) {
       method: "POST",
       body: formData
     });
-    if (!response.ok) throw new Error("Import failed");
-    const result = await response.json();
-    alert(`Đã nhập ${result.imported} Block Time rules từ Excel`);
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.detail || "Import failed");
+    reportImportResult("Block Time rules", result);
     await renderBTTable();
   } catch (err) {
     alert("Lỗi: " + err.message);
@@ -2492,9 +2545,9 @@ async function importRegExcel(e) {
       method: "POST",
       body: formData
     });
-    if (!response.ok) throw new Error("Import failed");
-    const result = await response.json();
-    alert(`Đã nhập ${result.imported} registrations từ Excel`);
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.detail || "Import failed");
+    reportImportResult("registrations", result);
     await renderRegTable();
   } catch (err) {
     alert("Lỗi: " + err.message);
@@ -2567,6 +2620,116 @@ async function saveUser() {
     if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || "Lỗi"); }
     doc("userFormModal").classList.add("hidden");
     await renderUserTable();
+  } catch (err) { alert("Lỗi: " + err.message); }
+}
+
+// ─── Database management (admin only) ────────────────────────────────────────
+const MAX_DATABASES = 10; // must match backend MAX_DATABASES in app/routers/auth.py
+
+async function renderDatabaseTable() {
+  try {
+    const dbs = await fetch("/api/auth/databases").then(r => r.json());
+    state.databases = dbs;
+    const tbody = doc("databaseTableBody");
+    tbody.innerHTML = "";
+    for (const d of dbs) {
+      const tr = document.createElement("tr");
+      const nameEscaped = d.name.replace(/'/g, "\\'");
+      const passwordBadge = d.has_password
+        ? '<span class="tag-domestic"><i class="fas fa-lock"></i> Có mật khẩu</span>'
+        : '<span class="tag-unknown">Không có</span>';
+      tr.innerHTML = `
+        <td>${d.name}</td>
+        <td><code>${d.filename}</code></td>
+        <td>${d.is_default ? '<span class="tag-domestic">Mặc định</span>' : '<span class="tag-intl">Demo</span>'}</td>
+        <td>${passwordBadge}</td>
+        <td class="action-cell">
+          ${!d.is_default ? `
+            <button class="btn btn-secondary btn-sm" onclick="editDatabase(${d.id},'${nameEscaped}')">Sửa</button>
+            <button class="btn btn-danger btn-sm" onclick="deleteDatabase(${d.id})">Xoá</button>
+          ` : ""}
+          <button class="btn btn-secondary btn-sm" onclick="openDatabasePassword(${d.id},'${nameEscaped}')">${d.has_password ? "Đổi mật khẩu" : "Đặt mật khẩu"}</button>
+          ${d.has_password ? `<button class="btn btn-danger btn-sm" onclick="clearDatabasePassword(${d.id})">Xoá mật khẩu</button>` : ""}
+        </td>`;
+      tbody.appendChild(tr);
+    }
+
+    // Enforce/display the max-database limit (non-default databases only)
+    const nonDefaultCount = dbs.filter(d => !d.is_default).length;
+    const addBtn = doc("btnAddDatabase");
+    if (addBtn) {
+      const atLimit = nonDefaultCount >= MAX_DATABASES;
+      addBtn.disabled = atLimit;
+      addBtn.title = atLimit ? `Đã đạt giới hạn tối đa ${MAX_DATABASES} database` : "";
+    }
+    const limitInfo = doc("databaseLimitInfo");
+    if (limitInfo) {
+      limitInfo.textContent = `${nonDefaultCount}/${MAX_DATABASES} database đã dùng`;
+    }
+  } catch {}
+  await loadDatabaseSwitcher();
+}
+
+function editDatabase(id, name) {
+  doc("databaseId").value = id;
+  doc("databaseName").value = name;
+  doc("databaseFormTitle").textContent = "Đổi tên database";
+  doc("databaseFormModal").classList.remove("hidden");
+}
+
+async function deleteDatabase(id) {
+  if (!confirm("Xoá database này? Toàn bộ dữ liệu bên trong sẽ mất vĩnh viễn.")) return;
+  try {
+    const res = await fetch(`/api/auth/databases/${id}`, { method: "DELETE" });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || "Lỗi"); }
+    await renderDatabaseTable();
+  } catch (err) { alert("Lỗi: " + err.message); }
+}
+
+async function saveDatabase() {
+  const id = doc("databaseId").value;
+  const name = doc("databaseName").value.trim();
+  if (!name) { alert("Điền tên database"); return; }
+  try {
+    const method = id ? "PUT" : "POST";
+    const url = id ? `/api/auth/databases/${id}` : "/api/auth/databases";
+    const res = await fetch(url, {
+      method, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }),
+    });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || "Lỗi"); }
+    doc("databaseFormModal").classList.add("hidden");
+    await renderDatabaseTable();
+  } catch (err) { alert("Lỗi: " + err.message); }
+}
+
+// ─── Database password protection (admin only) ───────────────────────────────
+function openDatabasePassword(id, name) {
+  doc("databasePasswordId").value = id;
+  doc("databasePasswordValue").value = "";
+  doc("databasePasswordTitle").textContent = `Đặt mật khẩu cho "${name}"`;
+  doc("databasePasswordModal").classList.remove("hidden");
+}
+
+async function saveDatabasePassword() {
+  const id = doc("databasePasswordId").value;
+  const password = doc("databasePasswordValue").value;
+  if (!password) { alert("Điền mật khẩu"); return; }
+  try {
+    const res = await fetch(`/api/auth/databases/${id}/password`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password }),
+    });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || "Lỗi"); }
+    doc("databasePasswordModal").classList.add("hidden");
+    await renderDatabaseTable();
+  } catch (err) { alert("Lỗi: " + err.message); }
+}
+
+async function clearDatabasePassword(id) {
+  if (!confirm("Xoá mật khẩu của database này? Bất kỳ ai cũng có thể chọn database này sau đó.")) return;
+  try {
+    const res = await fetch(`/api/auth/databases/${id}/password`, { method: "DELETE" });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || "Lỗi"); }
+    await renderDatabaseTable();
   } catch (err) { alert("Lỗi: " + err.message); }
 }
 
@@ -3478,7 +3641,14 @@ async function handleImportFileXLSX(e) {
     await loadReferenceData();
     await refreshView();
     showToast("Import Excel thành công!", "success");
-    alert(`Import thành công!\n${result.message || ""}`);
+    let msg = `Import thành công!\n${result.message || ""}`;
+    const allErrors = [...(result.sector_errors || []), ...(result.maintenance_errors || []), ...(result.calendar_note_errors || [])];
+    if (allErrors.length) {
+      msg += `\n\nCác dòng bị bỏ qua:\n` +
+        allErrors.slice(0, 20).map(e => `- Dòng ${e.row}: ${e.error}`).join("\n");
+      if (allErrors.length > 20) msg += `\n... và ${allErrors.length - 20} dòng khác`;
+    }
+    alert(msg);
   } catch (err) {
     alert("Lỗi import Excel: " + err.message);
   }
@@ -4718,6 +4888,22 @@ function bindUI() {
   });
   doc("btnSaveUser").addEventListener("click", saveUser);
 
+  // Database management
+  doc("btnAddDatabase").addEventListener("click", () => {
+    doc("databaseId").value = "";
+    doc("databaseName").value = "";
+    doc("databaseFormTitle").textContent = "Thêm database";
+    doc("databaseFormModal").classList.remove("hidden");
+  });
+  doc("btnSaveDatabase").addEventListener("click", saveDatabase);
+  doc("btnSaveDatabasePassword").addEventListener("click", saveDatabasePassword);
+
+  // Database switcher (all roles)
+  const dbSwitcherEl = doc("dbSwitcher");
+  if (dbSwitcherEl) {
+    dbSwitcherEl.addEventListener("change", (e) => switchDatabase(e.target.value));
+  }
+
   // Airport modal
   doc("btnAddAirport").addEventListener("click", () => {
     doc("apCode").value = "";
@@ -5095,6 +5281,10 @@ window.editAirport  = editAirport;
 window.deleteAirport= deleteAirport;
 window.editUser     = editUser;
 window.deleteUser   = deleteUser;
+window.editDatabase   = editDatabase;
+window.deleteDatabase = deleteDatabase;
+window.openDatabasePassword  = openDatabasePassword;
+window.clearDatabasePassword = clearDatabasePassword;
 window.editSeason   = editSeason;
 window.deleteSeason = deleteSeason;
 window.openMaintenanceModal = openMaintenanceModal;

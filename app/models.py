@@ -146,6 +146,22 @@ class AppSetting(Base):
     value = Column(String(500), nullable=True)
 
 
+class AppDatabase(Base):
+    """Registry of business databases available for selection (multi-db support).
+
+    Lives only in the master database (airline_schedule.db). The default row
+    (is_default=True, filename="airline_schedule.db") can never be renamed or
+    deleted.
+    """
+    __tablename__ = "app_databases"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False)
+    filename = Column(String(200), unique=True, nullable=False)
+    is_default = Column(Boolean, default=False, nullable=False)
+    password_hash = Column(String(200), nullable=True)  # optional access password (SHA-256)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class RosterRule(Base):
     """Roster rules: sign-on/sign-off offsets and crew set size for a given number of sectors."""
     __tablename__ = "roster_rules"

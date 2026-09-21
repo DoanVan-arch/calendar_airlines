@@ -178,6 +178,19 @@ body {
   gap: 8px;
 }
 
+.db-switcher {
+  background: var(--bg-surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-family: var(--font);
+  max-width: 180px;
+  cursor: pointer;
+}
+.db-switcher:hover { border-color: var(--accent); }
+
 /* ── Buttons ───────────────────────────────────────────────────────────────── */
 .btn {
   display: inline-flex;

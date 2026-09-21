@@ -236,6 +236,8 @@ def hhmm_to_minutes(value) -> int:
       - datetime.time  → hours*60 + minutes
       - float (Excel serial fraction of a day, e.g. 0.0625 = 1h30m) → *1440
     """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        raise ValueError("Giá trị thời gian bị trống")
     if isinstance(value, datetime.time):
         return value.hour * 60 + value.minute
     if isinstance(value, (int, float)):
@@ -245,7 +247,35 @@ def hhmm_to_minutes(value) -> int:
     # fallback: treat as "HH:MM" string
     text = str(value).strip()
     parts = text.replace(",", ":").split(":")
+    if len(parts) < 2 or not parts[0].strip().lstrip("-").isdigit() or not parts[1].strip().isdigit():
+        raise ValueError(f"Định dạng thời gian không hợp lệ: '{value}' (yêu cầu HH:MM)")
     return int(parts[0]) * 60 + int(parts[1])
+
+
+def _find_import_sheet(wb, preferred_title: str):
+    """Prefer the sheet matching the export's title, but fall back to the
+    active sheet so files saved/renamed by Excel still work."""
+    if preferred_title in wb.sheetnames:
+        return wb[preferred_title]
+    return wb.active
+
+
+def _header_index_map(ws) -> dict:
+    """Map header text (stripped) -> column index, read from the first row.
+
+    This makes import resilient to the user inserting/reordering/removing
+    columns when manually editing the exported file.
+    """
+    header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
+    return {
+        str(h).strip(): i
+        for i, h in enumerate(header_row)
+        if h is not None and str(h).strip()
+    }
+
+
+def _cell(row, idx):
+    return row[idx] if idx is not None and idx < len(row) else None
 
 
 @router.get("/tat/export")
@@ -287,25 +317,34 @@ async def import_tat_excel(request: Request, file: UploadFile = File(...), db: S
     require_admin(request)
     content = await file.read()
     wb = openpyxl.load_workbook(io.BytesIO(content))
-    ws = wb.active
-    
+    ws = _find_import_sheet(wb, "TAT Rules")
+
+    cols = _header_index_map(ws)
+    idx_station = cols.get("Station")
+    idx_time = cols.get("Min TAT")
+    if idx_station is None or idx_time is None:
+        raise HTTPException(400, "File Excel không đúng định dạng: thiếu cột 'Station' hoặc 'Min TAT'.")
+
     imported = 0
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        if not row[0]:
+    errors = []
+    for row_num, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+        station_val = _cell(row, idx_station)
+        if not station_val:
             continue
-        station = str(row[0]).upper().strip()
-        time_str = str(row[1]).strip()
-        minutes = hhmm_to_minutes(time_str)
-        
-        existing = db.query(TATRule).filter(TATRule.station == station).first()
-        if existing:
-            existing.min_tat_minutes = minutes
-        else:
-            db.add(TATRule(station=station, min_tat_minutes=minutes))
-        imported += 1
-    
+        try:
+            station = str(station_val).upper().strip()
+            minutes = hhmm_to_minutes(_cell(row, idx_time))
+            existing = db.query(TATRule).filter(TATRule.station == station).first()
+            if existing:
+                existing.min_tat_minutes = minutes
+            else:
+                db.add(TATRule(station=station, min_tat_minutes=minutes))
+            imported += 1
+        except Exception as e:
+            errors.append({"row": row_num, "error": str(e)})
+
     db.commit()
-    return {"imported": imported}
+    return {"imported": imported, "errors": errors}
 
 
 @router.get("/blocktime/export")
@@ -347,33 +386,49 @@ async def import_blocktime_excel(request: Request, file: UploadFile = File(...),
     require_admin(request)
     content = await file.read()
     wb = openpyxl.load_workbook(io.BytesIO(content))
-    ws = wb.active
-    
+    ws = _find_import_sheet(wb, "Block Time Rules")
+
+    cols = _header_index_map(ws)
+    idx_origin = cols.get("Origin")
+    idx_dest = cols.get("Destination")
+    idx_time = cols.get("Block Time")
+    idx_ats = cols.get("ATS")
+    idx_dist = cols.get("Distance (km)")
+    if idx_origin is None or idx_dest is None or idx_time is None:
+        raise HTTPException(400, "File Excel không đúng định dạng: thiếu cột 'Origin', 'Destination' hoặc 'Block Time'.")
+
     imported = 0
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        if not row[0] or not row[1]:
+    errors = []
+    for row_num, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+        origin_val = _cell(row, idx_origin)
+        dest_val = _cell(row, idx_dest)
+        if not origin_val or not dest_val:
             continue
-        origin = str(row[0]).upper().strip()
-        dest = str(row[1]).upper().strip()
-        time_str = str(row[2]).strip()
-        minutes = hhmm_to_minutes(time_str)
-        ats = str(row[4]).strip() if len(row) > 4 and row[4] else None
-        distance_km = int(row[5]) if len(row) > 5 and row[5] and str(row[5]).strip() else None
-        
-        existing = db.query(BlockTimeRule).filter(
-            BlockTimeRule.origin == origin,
-            BlockTimeRule.destination == dest
-        ).first()
-        if existing:
-            existing.block_time_minutes = minutes
-            existing.ats = ats
-            existing.distance_km = distance_km
-        else:
-            db.add(BlockTimeRule(origin=origin, destination=dest, block_time_minutes=minutes, ats=ats, distance_km=distance_km))
-        imported += 1
-    
+        try:
+            origin = str(origin_val).upper().strip()
+            dest = str(dest_val).upper().strip()
+            minutes = hhmm_to_minutes(_cell(row, idx_time))
+            ats_val = _cell(row, idx_ats)
+            ats = str(ats_val).strip() if ats_val else None
+            dist_val = _cell(row, idx_dist)
+            distance_km = int(float(dist_val)) if dist_val not in (None, "") else None
+
+            existing = db.query(BlockTimeRule).filter(
+                BlockTimeRule.origin == origin,
+                BlockTimeRule.destination == dest
+            ).first()
+            if existing:
+                existing.block_time_minutes = minutes
+                existing.ats = ats
+                existing.distance_km = distance_km
+            else:
+                db.add(BlockTimeRule(origin=origin, destination=dest, block_time_minutes=minutes, ats=ats, distance_km=distance_km))
+            imported += 1
+        except Exception as e:
+            errors.append({"row": row_num, "error": str(e)})
+
     db.commit()
-    return {"imported": imported}
+    return {"imported": imported, "errors": errors}
 
 
 # ── Registration ───────────────────────────────────────────────────────────────
@@ -472,33 +527,51 @@ async def import_registration_excel(request: Request, file: UploadFile = File(..
     require_admin(request)
     content = await file.read()
     wb = openpyxl.load_workbook(io.BytesIO(content))
-    ws = wb.active
+    ws = _find_import_sheet(wb, "Registrations")
+
+    cols = _header_index_map(ws)
+    idx_reg = cols.get("Số đăng bạ")
+    idx_model = cols.get("Mẫu máy bay")
+    idx_seats = cols.get("Số ghế")
+    idx_dw = cols.get("D/W")
+    idx_mtow = cols.get("MTOW")
+    if idx_reg is None or idx_model is None or idx_seats is None:
+        raise HTTPException(400, "File Excel không đúng định dạng: thiếu cột 'Số đăng bạ', 'Mẫu máy bay' hoặc 'Số ghế'.")
 
     imported = 0
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        if not row[0]:
+    errors = []
+    for row_num, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+        reg_val = _cell(row, idx_reg)
+        if not reg_val:
             continue
-        reg_code = str(row[0]).upper().strip()
-        model = str(row[1]).strip() if row[1] else ""
-        seats = int(row[2]) if row[2] else 0
-        dw = str(row[3]).strip() if len(row) > 3 and row[3] else None
-        mtow_val = float(row[4]) if len(row) > 4 and row[4] else None
+        try:
+            reg_code = str(reg_val).upper().strip()
+            model_val = _cell(row, idx_model)
+            model = str(model_val).strip() if model_val else ""
+            seats_val = _cell(row, idx_seats)
+            seats = int(float(seats_val)) if seats_val not in (None, "") else 0
+            dw_val = _cell(row, idx_dw)
+            dw = str(dw_val).strip() if dw_val else None
+            mtow_val_raw = _cell(row, idx_mtow)
+            mtow_val = float(mtow_val_raw) if mtow_val_raw not in (None, "") else None
 
-        existing = db.query(Registration).filter(Registration.registration == reg_code).first()
-        if existing:
-            existing.aircraft_model = model
-            existing.seats = seats
-            existing.dw_type = dw if dw else None
-            existing.mtow = mtow_val
-        else:
-            db.add(Registration(
-                registration=reg_code, aircraft_model=model, seats=seats,
-                dw_type=dw if dw else None, mtow=mtow_val,
-            ))
-        imported += 1
+            existing = db.query(Registration).filter(Registration.registration == reg_code).first()
+            if existing:
+                existing.aircraft_model = model
+                existing.seats = seats
+                existing.dw_type = dw if dw else None
+                existing.mtow = mtow_val
+            else:
+                db.add(Registration(
+                    registration=reg_code, aircraft_model=model, seats=seats,
+                    dw_type=dw if dw else None, mtow=mtow_val,
+                ))
+            imported += 1
+        except Exception as e:
+            errors.append({"row": row_num, "error": str(e)})
 
     db.commit()
-    return {"imported": imported}
+    return {"imported": imported, "errors": errors}
 
 
 # ── Route Colors ───────────────────────────────────────────────────────────────

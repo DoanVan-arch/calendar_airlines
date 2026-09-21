@@ -10,7 +10,7 @@ import json
 from ..database import get_db
 from ..models import (FlightSector, Aircraft, Airport, BlockTimeRule, TATRule,
                       Registration, Season, MaintenanceBlock, CalendarNote,
-                      RouteColor, AppSetting)
+                      RouteColor, AppSetting, User)
 from ..schemas import TimetableExportParams, ReportParams, ImportPayload
 
 router = APIRouter()
@@ -478,7 +478,7 @@ def export_report(params: ReportParams, db: Session = Depends(get_db)):
 @router.get("/schedule")
 def export_schedule(db: Session = Depends(get_db)):
     airports = [{"code": a.code, "name": a.name, "timezone_offset": a.timezone_offset,
-                 "curfew_open": a.curfew_open, "curfew_close": a.curfew_close}
+                 "is_domestic": a.is_domestic, "curfew_open": a.curfew_open, "curfew_close": a.curfew_close}
                 for a in db.query(Airport).all()]
     aircraft = [{"id": a.id, "registration": a.registration, "name": a.name,
                  "ac_type": a.ac_type, "line_order": a.line_order,
@@ -520,6 +520,9 @@ def export_schedule(db: Session = Depends(get_db)):
                     for rc in db.query(RouteColor).all()]
     app_settings = [{"key": s.key, "value": s.value}
                     for s in db.query(AppSetting).all()]
+    users = [{"id": u.id, "username": u.username, "password_hash": u.password_hash,
+              "role": u.role, "display_name": u.display_name}
+             for u in db.query(User).all()]
 
     return {
         "version": "2.0",
@@ -535,6 +538,7 @@ def export_schedule(db: Session = Depends(get_db)):
         "calendar_notes": calendar_notes,
         "route_colors": route_colors,
         "app_settings": app_settings,
+        "users": users,
     }
 
 
@@ -555,6 +559,8 @@ def import_schedule(payload: dict = Body(...), db: Session = Depends(get_db)):
         db.query(CalendarNote).delete()
         db.query(RouteColor).delete()
         db.query(AppSetting).delete()
+        # Delete all users EXCEPT the default admin (username='admin')
+        db.query(User).filter(User.username != "admin").delete()
         db.commit()
 
     # Airports (always merge, never delete)
@@ -564,11 +570,14 @@ def import_schedule(payload: dict = Body(...), db: Session = Depends(get_db)):
         if not existing:
             db.add(Airport(code=code, name=ap_data.get("name", ""),
                            timezone_offset=ap_data.get("timezone_offset", 7.0),
+                           is_domestic=ap_data.get("is_domestic", True),
                            curfew_open=ap_data.get("curfew_open"),
                            curfew_close=ap_data.get("curfew_close")))
         else:
             existing.name = ap_data.get("name") or existing.name
             existing.timezone_offset = ap_data.get("timezone_offset") if ap_data.get("timezone_offset") is not None else existing.timezone_offset
+            if ap_data.get("is_domestic") is not None:
+                existing.is_domestic = ap_data["is_domestic"]
             if ap_data.get("curfew_open") is not None:
                 existing.curfew_open = ap_data["curfew_open"]
             if ap_data.get("curfew_close") is not None:
@@ -751,11 +760,33 @@ def import_schedule(payload: dict = Body(...), db: Session = Depends(get_db)):
         else:
             db.add(AppSetting(key=s_data["key"], value=s_data.get("value")))
 
+    # Users (skip default admin user)
+    for u_data in payload.get("users", []):
+        username = u_data["username"]
+        # Skip admin user to prevent overwriting default credentials
+        if username == "admin":
+            continue
+        existing = db.query(User).filter(User.username == username).first()
+        if not existing:
+            db.add(User(
+                username=username,
+                password_hash=u_data["password_hash"],
+                role=u_data.get("role", "viewer"),
+                display_name=u_data.get("display_name")
+            ))
+        else:
+            # Update existing user (preserve password_hash from imported data)
+            existing.password_hash = u_data["password_hash"]
+            existing.role = u_data.get("role", existing.role)
+            if u_data.get("display_name") is not None:
+                existing.display_name = u_data["display_name"]
+
     db.commit()
 
     cnt_sectors = len(payload.get("sectors", []))
     cnt_aircraft = len(payload.get("aircraft", []))
-    return {"ok": True, "message": f"Import successful: {cnt_aircraft} aircraft, {cnt_sectors} sectors"}
+    cnt_users = len([u for u in payload.get("users", []) if u["username"] != "admin"])
+    return {"ok": True, "message": f"Import successful: {cnt_aircraft} aircraft, {cnt_sectors} sectors, {cnt_users} users"}
 #-- help excel----
 def _write_sheet(wb: openpyxl.Workbook, title: str, headers: list[str], rows: list[dict]):
     ws = wb.create_sheet(title=title)
@@ -780,6 +811,66 @@ def _read_sheet(wb: openpyxl.Workbook, title: str) -> list[dict]:
     return result
 
 
+def _read_sheet_indexed(wb: openpyxl.Workbook, title: str) -> list:
+    """Like _read_sheet, but also returns the original Excel row number for
+    each record, so import errors can point the user to the exact row."""
+    if title not in wb.sheetnames:
+        return []
+    ws = wb[title]
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        return []
+    headers = [str(h) if h is not None else "" for h in rows[0]]
+    result = []
+    for i, row in enumerate(rows[1:], start=2):
+        if all(v is None for v in row):
+            continue  # skip empty rows
+        result.append((i, dict(zip(headers, row))))
+    return result
+
+
+import datetime as _dt
+
+
+def _norm_date(value):
+    """Normalize a date cell to 'YYYY-MM-DD'.
+
+    Excel/openpyxl often returns date cells as `datetime.datetime` or
+    `datetime.date` objects (especially after a user manually edits/re-saves
+    the exported file), which previously got stored as-is (e.g.
+    "2026-01-15 00:00:00") and broke code elsewhere that expects a plain
+    "YYYY-MM-DD" string (e.g. `datetime.strptime(..., "%Y-%m-%d")`).
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, _dt.datetime):
+        return value.strftime("%Y-%m-%d")
+    if isinstance(value, _dt.date):
+        return value.strftime("%Y-%m-%d")
+    text = str(value).strip()
+    if " " in text:
+        text = text.split(" ")[0]
+    if "T" in text:
+        text = text.split("T")[0]
+    return text
+
+
+def _norm_time(value):
+    """Normalize a time cell to 'HH:MM'."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, _dt.datetime):
+        return value.strftime("%H:%M")
+    if isinstance(value, _dt.time):
+        return value.strftime("%H:%M")
+    text = str(value).strip()
+    # Handle "HH:MM:SS" by trimming seconds
+    parts = text.split(":")
+    if len(parts) >= 2:
+        return f"{parts[0].zfill(2)}:{parts[1].zfill(2)}"
+    return text
+
+
 # ── Export ─────────────────────────────────────────────────────────────────────
 
 @router.get("/schedulexlsx")
@@ -790,9 +881,9 @@ def export_schedule(db: Session = Depends(get_db)):
     # Airports
     airports = db.query(Airport).all()
     _write_sheet(wb, "airports",
-                 ["code", "name", "timezone_offset", "curfew_open", "curfew_close"],
+                 ["code", "name", "timezone_offset", "is_domestic", "curfew_open", "curfew_close"],
                  [{"code": a.code, "name": a.name, "timezone_offset": a.timezone_offset,
-                   "curfew_open": a.curfew_open, "curfew_close": a.curfew_close}
+                   "is_domestic": a.is_domestic, "curfew_open": a.curfew_open, "curfew_close": a.curfew_close}
                   for a in airports])
 
     # Registrations
@@ -815,10 +906,13 @@ def export_schedule(db: Session = Depends(get_db)):
 
     # Sectors
     sectors = db.query(FlightSector).all()
+    aircraft_reg_by_id = {a.id: a.registration for a in aircraft}
     _write_sheet(wb, "sectors",
-                 ["id", "aircraft_id", "flight_date", "origin", "destination",
+                 ["id", "aircraft_id", "registration", "flight_date", "origin", "destination",
                   "dep_utc", "arr_utc", "flight_number", "status", "sequence", "color"],
-                 [{"id": s.id, "aircraft_id": s.aircraft_id, "flight_date": s.flight_date,
+                 [{"id": s.id, "aircraft_id": s.aircraft_id,
+                   "registration": aircraft_reg_by_id.get(s.aircraft_id, ""),
+                   "flight_date": s.flight_date,
                    "origin": s.origin, "destination": s.destination,
                    "dep_utc": s.dep_utc, "arr_utc": s.arr_utc,
                    "flight_number": s.flight_number, "status": s.status,
@@ -852,8 +946,10 @@ def export_schedule(db: Session = Depends(get_db)):
     # Maintenance
     maintenance = db.query(MaintenanceBlock).all()
     _write_sheet(wb, "maintenance",
-                 ["aircraft_id", "label", "start_date", "end_date", "start_time", "end_time", "color"],
-                 [{"aircraft_id": m.aircraft_id, "label": m.label,
+                 ["aircraft_id", "registration", "label", "start_date", "end_date", "start_time", "end_time", "color"],
+                 [{"aircraft_id": m.aircraft_id,
+                   "registration": aircraft_reg_by_id.get(m.aircraft_id, ""),
+                   "label": m.label,
                    "start_date": m.start_date, "end_date": m.end_date,
                    "start_time": m.start_time, "end_time": m.end_time,
                    "color": m.color}
@@ -880,6 +976,14 @@ def export_schedule(db: Session = Depends(get_db)):
     _write_sheet(wb, "app_settings",
                  ["key", "value"],
                  [{"key": s.key, "value": s.value} for s in app_settings])
+
+    # Users
+    users = db.query(User).all()
+    _write_sheet(wb, "users",
+                 ["id", "username", "password_hash", "role", "display_name"],
+                 [{"id": u.id, "username": u.username, "password_hash": u.password_hash,
+                   "role": u.role, "display_name": u.display_name}
+                  for u in users])
 
     # Stream file
     buf = io.BytesIO()
@@ -918,6 +1022,8 @@ async def import_schedule(
         db.query(CalendarNote).delete()
         db.query(RouteColor).delete()
         db.query(AppSetting).delete()
+        # Delete all users EXCEPT the default admin (username='admin')
+        db.query(User).filter(User.username != "admin").delete()
         db.commit()
 
     # ── Airports ──────────────────────────────────────────────────────────────
@@ -931,6 +1037,7 @@ async def import_schedule(
                 code=code,
                 name=ap.get("name", ""),
                 timezone_offset=ap.get("timezone_offset", 7.0),
+                is_domestic=ap.get("is_domestic", True),
                 curfew_open=ap.get("curfew_open"),
                 curfew_close=ap.get("curfew_close"),
             ))
@@ -939,6 +1046,8 @@ async def import_schedule(
                 existing.name = ap["name"]
             if ap.get("timezone_offset") is not None:
                 existing.timezone_offset = ap["timezone_offset"]
+            if ap.get("is_domestic") is not None:
+                existing.is_domestic = ap["is_domestic"]
             if ap.get("curfew_open") is not None:
                 existing.curfew_open = ap["curfew_open"]
             if ap.get("curfew_close") is not None:
@@ -1018,34 +1127,81 @@ async def import_schedule(
     db.commit()
 
     # ── Sectors ───────────────────────────────────────────────────────────────
-    for s in _read_sheet(wb, "sectors"):
-        old_ac_id = s.get("aircraft_id")
-        ac_id = old_to_new_ac.get(int(old_ac_id), int(old_ac_id)) if old_ac_id else None
-        origin = str(s["origin"]).upper()
-        dest   = str(s["destination"]).upper()
-        # In merge mode, skip sectors that already exist to avoid duplicates
-        if not replace_all:
-            dup = db.query(FlightSector).filter(
-                FlightSector.aircraft_id == ac_id,
-                FlightSector.flight_date == s["flight_date"],
-                FlightSector.origin == origin,
-                FlightSector.destination == dest,
-                FlightSector.dep_utc == s["dep_utc"],
-            ).first()
-            if dup:
-                continue
-        db.add(FlightSector(
-            aircraft_id=ac_id,
-            flight_date=s["flight_date"],
-            origin=origin,
-            destination=dest,
-            dep_utc=s["dep_utc"],
-            arr_utc=s["arr_utc"],
-            flight_number=s.get("flight_number"),
-            status=s.get("status", "active"),
-            sequence=int(s["sequence"]) if s.get("sequence") is not None else 0,
-            color=s.get("color"),
-        ))
+    # Build a registration -> aircraft_id lookup so manually added rows can
+    # reference an aircraft by its tail number (registration) instead of the
+    # internal numeric id, which the user editing the exported file typically
+    # doesn't know or gets wrong.
+    aircraft_id_by_reg = {
+        a.registration.upper(): a.id
+        for a in db.query(Aircraft).all()
+        if a.registration
+    }
+
+    sector_imported = 0
+    sector_errors = []
+    for row_num, s in _read_sheet_indexed(wb, "sectors"):
+        try:
+            origin_val = s.get("origin")
+            dest_val = s.get("destination")
+            flight_date = _norm_date(s.get("flight_date"))
+            dep_utc = _norm_time(s.get("dep_utc"))
+            arr_utc = _norm_time(s.get("arr_utc"))
+            if not origin_val or not dest_val or not flight_date or not dep_utc or not arr_utc:
+                missing = [name for name, v in [
+                    ("origin", origin_val), ("destination", dest_val),
+                    ("flight_date", flight_date), ("dep_utc", dep_utc), ("arr_utc", arr_utc),
+                ] if not v]
+                raise ValueError(f"Thiếu dữ liệu bắt buộc: {', '.join(missing)}")
+
+            origin = str(origin_val).upper().strip()
+            dest = str(dest_val).upper().strip()
+
+            # Resolve aircraft: prefer remapped old id, fall back to the
+            # human-friendly "registration" column for manually added rows.
+            ac_id = None
+            old_ac_id = s.get("aircraft_id")
+            if old_ac_id not in (None, ""):
+                try:
+                    old_ac_id_int = int(float(old_ac_id))
+                    ac_id = old_to_new_ac.get(old_ac_id_int, old_ac_id_int)
+                except (TypeError, ValueError):
+                    ac_id = None
+            if ac_id is None:
+                reg_val = s.get("registration")
+                if reg_val:
+                    ac_id = aircraft_id_by_reg.get(str(reg_val).upper().strip())
+            if ac_id is None:
+                raise ValueError(
+                    f"Không tìm thấy máy bay (aircraft_id={old_ac_id!r}, registration={s.get('registration')!r}). "
+                    "Điền đúng số đăng bạ (registration) đã tồn tại."
+                )
+
+            # In merge mode, skip sectors that already exist to avoid duplicates
+            if not replace_all:
+                dup = db.query(FlightSector).filter(
+                    FlightSector.aircraft_id == ac_id,
+                    FlightSector.flight_date == flight_date,
+                    FlightSector.origin == origin,
+                    FlightSector.destination == dest,
+                    FlightSector.dep_utc == dep_utc,
+                ).first()
+                if dup:
+                    continue
+            db.add(FlightSector(
+                aircraft_id=ac_id,
+                flight_date=flight_date,
+                origin=origin,
+                destination=dest,
+                dep_utc=dep_utc,
+                arr_utc=arr_utc,
+                flight_number=s.get("flight_number"),
+                status=s.get("status") or "active",
+                sequence=int(s["sequence"]) if s.get("sequence") is not None else 0,
+                color=s.get("color"),
+            ))
+            sector_imported += 1
+        except Exception as e:
+            sector_errors.append({"row": row_num, "error": str(e)})
     db.commit()
 
     # ── Block-time rules ──────────────────────────────────────────────────────
@@ -1083,33 +1239,61 @@ async def import_schedule(
             Season.name == s["name"], Season.year == s["year"]).first()
         if not existing:
             db.add(Season(name=s["name"], season_type=s.get("season_type"),
-                          year=s["year"], start_date=s["start_date"],
-                          end_date=s["end_date"]))
+                          year=s["year"], start_date=_norm_date(s["start_date"]),
+                          end_date=_norm_date(s["end_date"])))
 
     # ── Maintenance ───────────────────────────────────────────────────────────
-    for m in _read_sheet(wb, "maintenance"):
-        old_ac_id = m.get("aircraft_id")
-        ac_id = old_to_new_ac.get(int(old_ac_id), int(old_ac_id)) if old_ac_id else None
-        db.add(MaintenanceBlock(
-            aircraft_id=ac_id,
-            label=m.get("label", "Maintenance"),
-            start_date=m["start_date"],
-            end_date=m["end_date"],
-            start_time=m.get("start_time"),
-            end_time=m.get("end_time"),
-            color=m.get("color", "#f59e0b"),
-        ))
+    maintenance_errors = []
+    maintenance_imported = 0
+    for row_num, m in _read_sheet_indexed(wb, "maintenance"):
+        try:
+            if not m.get("start_date") or not m.get("end_date"):
+                raise ValueError("Thiếu start_date hoặc end_date")
+            ac_id = None
+            old_ac_id = m.get("aircraft_id")
+            if old_ac_id not in (None, ""):
+                try:
+                    old_ac_id_int = int(float(old_ac_id))
+                    ac_id = old_to_new_ac.get(old_ac_id_int, old_ac_id_int)
+                except (TypeError, ValueError):
+                    ac_id = None
+            if ac_id is None:
+                reg_val = m.get("registration")
+                if reg_val:
+                    ac_id = aircraft_id_by_reg.get(str(reg_val).upper().strip())
+            if ac_id is None:
+                raise ValueError(
+                    f"Không tìm thấy máy bay (aircraft_id={old_ac_id!r}, registration={m.get('registration')!r})."
+                )
+            db.add(MaintenanceBlock(
+                aircraft_id=ac_id,
+                label=m.get("label") or "Maintenance",
+                start_date=_norm_date(m["start_date"]),
+                end_date=_norm_date(m["end_date"]),
+                start_time=_norm_time(m.get("start_time")),
+                end_time=_norm_time(m.get("end_time")),
+                color=m.get("color") or "#f59e0b",
+            ))
+            maintenance_imported += 1
+        except Exception as e:
+            maintenance_errors.append({"row": row_num, "error": str(e)})
 
     # ── Calendar notes ────────────────────────────────────────────────────────
-    for n in _read_sheet(wb, "calendar_notes"):
-        db.add(CalendarNote(
-            note_date=n["note_date"],
-            note_end_date=n.get("note_end_date"),
-            start_time=n.get("start_time"),
-            end_time=n.get("end_time"),
-            content=n["content"],
-            color=n.get("color", "#3b82f6"),
-        ))
+    calendar_note_errors = []
+    for row_num, n in _read_sheet_indexed(wb, "calendar_notes"):
+        try:
+            if not n.get("note_date") or not n.get("content"):
+                raise ValueError("Thiếu note_date hoặc content")
+            db.add(CalendarNote(
+                note_date=_norm_date(n["note_date"]),
+                note_end_date=_norm_date(n.get("note_end_date")),
+                start_time=_norm_time(n.get("start_time")),
+                end_time=_norm_time(n.get("end_time")),
+                content=n["content"],
+                color=n.get("color") or "#3b82f6",
+            ))
+        except Exception as e:
+            calendar_note_errors.append({"row": row_num, "error": str(e)})
 
     # ── Route colors ──────────────────────────────────────────────────────────
     for rc in _read_sheet(wb, "route_colors"):
@@ -1130,8 +1314,47 @@ async def import_schedule(
         else:
             db.add(AppSetting(key=s["key"], value=s.get("value")))
 
+    # ── Users ─────────────────────────────────────────────────────────────────
+    cnt_users = 0
+    for u in _read_sheet(wb, "users"):
+        username = u.get("username")
+        if not username or username == "admin":
+            continue  # Skip admin user
+        existing = db.query(User).filter(User.username == username).first()
+        if not existing:
+            db.add(User(
+                username=username,
+                password_hash=u.get("password_hash", ""),
+                role=u.get("role", "viewer"),
+                display_name=u.get("display_name")
+            ))
+            cnt_users += 1
+        else:
+            # Update existing user
+            if u.get("password_hash"):
+                existing.password_hash = u["password_hash"]
+            if u.get("role"):
+                existing.role = u["role"]
+            if u.get("display_name") is not None:
+                existing.display_name = u["display_name"]
+            cnt_users += 1
+
     db.commit()
 
-    cnt_sectors = len(_read_sheet(wb, "sectors"))
     cnt_aircraft = len(_read_sheet(wb, "aircraft"))
-    return {"ok": True, "message": f"Import successful: {cnt_aircraft} aircraft, {cnt_sectors} sectors"}
+    message = f"Import successful: {cnt_aircraft} aircraft, {sector_imported} sectors, {cnt_users} users"
+    if sector_errors:
+        message += f" — {len(sector_errors)} dòng sector bị bỏ qua do lỗi (xem chi tiết bên dưới)."
+    if maintenance_errors:
+        message += f" — {len(maintenance_errors)} dòng bảo dưỡng bị bỏ qua do lỗi."
+    if calendar_note_errors:
+        message += f" — {len(calendar_note_errors)} dòng ghi chú bị bỏ qua do lỗi."
+    return {
+        "ok": True,
+        "message": message,
+        "sectors_imported": sector_imported,
+        "sector_errors": sector_errors,
+        "maintenance_imported": maintenance_imported,
+        "maintenance_errors": maintenance_errors,
+        "calendar_note_errors": calendar_note_errors,
+    }

@@ -136,6 +136,23 @@
       margin-bottom: 6px;
     }
 
+    .select-wrap select {
+      width: 100%;
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 10px 12px;
+      font-size: 14px;
+      font-family: var(--font);
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .select-wrap select:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(33,136,255,0.15);
+    }
+
     .input-wrap {
       position: relative;
     }
@@ -282,6 +299,23 @@
       </div>
     </div>
 
+    <div class="form-group">
+      <label for="databaseId">Cơ sở dữ liệu</label>
+      <div class="select-wrap">
+        <select id="databaseId" name="databaseId">
+          <option value="">Đang tải...</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-group" id="dbPasswordGroup" style="display:none;">
+      <label for="dbPassword">Mật khẩu cơ sở dữ liệu</label>
+      <div class="input-wrap">
+        <i class="fas fa-lock input-icon"></i>
+        <input type="password" id="dbPassword" name="dbPassword" placeholder="Nhập mật khẩu cơ sở dữ liệu" autocomplete="off" />
+      </div>
+    </div>
+
     <button type="submit" class="btn-login" id="btnLogin">
       <div class="spinner"></div>
       <span class="btn-text"><i class="fas fa-sign-in-alt"></i> Đăng nhập</span>
@@ -301,6 +335,37 @@
   const togglePw    = document.getElementById('togglePw');
   const toggleIcon  = document.getElementById('togglePwIcon');
   const pwInput     = document.getElementById('password');
+  const dbSelect    = document.getElementById('databaseId');
+  const dbPasswordGroup = document.getElementById('dbPasswordGroup');
+  const dbPasswordInput = document.getElementById('dbPassword');
+  let databases = [];
+
+  function updateDbPasswordVisibility() {
+    const selected = databases.find(d => String(d.id) === dbSelect.value);
+    const needsPassword = !!(selected && selected.has_password);
+    dbPasswordGroup.style.display = needsPassword ? '' : 'none';
+    if (!needsPassword) dbPasswordInput.value = '';
+  }
+
+  // Load available databases for selection
+  (async () => {
+    try {
+      databases = await fetch('/api/auth/databases').then(r => r.json());
+      dbSelect.innerHTML = '';
+      for (const d of databases) {
+        const opt = document.createElement('option');
+        opt.value = d.id;
+        opt.textContent = (d.is_default ? `${d.name} (mặc định)` : d.name) + (d.has_password ? ' 🔒' : '');
+        if (d.is_default) opt.selected = true;
+        dbSelect.appendChild(opt);
+      }
+      updateDbPasswordVisibility();
+    } catch (err) {
+      dbSelect.innerHTML = '<option value="">Không tải được danh sách</option>';
+    }
+  })();
+
+  dbSelect.addEventListener('change', updateDbPasswordVisibility);
 
   // Toggle password visibility
   togglePw.addEventListener('click', () => {
@@ -317,13 +382,17 @@
 
     const username = document.getElementById('username').value.trim();
     const password = document.getElementById('password').value;
+    const database_id = dbSelect.value ? parseInt(dbSelect.value, 10) : null;
+    const db_password = dbPasswordInput.value || null;
 
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ username, password, database_id, db_password }),
       });
+
+
 
       if (res.ok) {
         window.location.href = '/';

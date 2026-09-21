@@ -7,12 +7,14 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .database import engine, SessionLocal
-from .models import Base, Airport, BlockTimeRule, TATRule, Registration, User, RosterRule
+from .database import engine, SessionLocal, create_database_file, MASTER_DB_FILENAME
+from .models import Base, Airport, BlockTimeRule, TATRule, Registration, User, RosterRule, AppDatabase
 from .routers import aircraft, sectors, rules, export, auth as auth_router
 from .routers import seasons as seasons_router, maintenance as maintenance_router, audit as audit_router
 from .routers import notes as notes_router
-from .routers.auth import is_authenticated, ensure_admin_user
+from .routers.auth import is_authenticated, ensure_admin_user, ensure_default_database
+
+NUM_DEMO_DATABASES = 10
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -127,6 +129,21 @@ def seed_defaults():
         db.close()
 
 
+def seed_demo_databases(db):
+    """Ensure the master db has a registry row for itself plus N empty demo databases."""
+    ensure_default_database(db)
+    for i in range(1, NUM_DEMO_DATABASES + 1):
+        filename = f"demo_{i}.db"
+        row = db.query(AppDatabase).filter(AppDatabase.filename == filename).first()
+        if not row:
+            create_database_file(filename)
+            db.add(AppDatabase(name=f"Demo {i}", filename=filename, is_default=False))
+            db.commit()
+        elif not os.path.exists(os.path.join(BASE_DIR, filename)):
+            # Registry row exists but the file was removed externally — recreate it empty.
+            create_database_file(filename)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
@@ -135,6 +152,7 @@ async def lifespan(app: FastAPI):
     db = SessionLocal()
     try:
         ensure_admin_user(db)
+        seed_demo_databases(db)
     finally:
         db.close()
     yield
@@ -406,6 +424,28 @@ def _migrate_db():
         except Exception:
             pass
 
+        # Create app_databases table (multi-database registry) if it doesn't exist
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS app_databases (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name VARCHAR(100) NOT NULL,
+                    filename VARCHAR(200) NOT NULL UNIQUE,
+                    is_default BOOLEAN NOT NULL DEFAULT 0,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            conn.commit()
+        except Exception:
+            pass
+
+        # Add password_hash column to app_databases (per-database access password)
+        try:
+            conn.execute(text("ALTER TABLE app_databases ADD COLUMN password_hash VARCHAR(200)"))
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+
 
 app = FastAPI(title="Airline Schedule Manager", lifespan=lifespan)
 
@@ -413,7 +453,7 @@ app = FastAPI(title="Airline Schedule Manager", lifespan=lifespan)
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     # Public paths that don't require authentication
-    public_paths = {"/login", "/api/auth/login", "/api/auth/logout"}
+    public_paths = {"/login", "/api/auth/login", "/api/auth/logout", "/api/auth/databases"}
     path = request.url.path
 
     # Allow static files always

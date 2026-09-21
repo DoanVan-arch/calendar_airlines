@@ -163,6 +163,28 @@ class UserOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# ── App database (multi-db) ─────────────────────────────────────────────────────
+class AppDatabaseCreate(BaseModel):
+    name: str
+
+
+class AppDatabaseUpdate(BaseModel):
+    name: str
+
+
+class AppDatabaseOut(BaseModel):
+    id: int
+    name: str
+    filename: str
+    is_default: bool
+    has_password: bool = False
+    model_config = {"from_attributes": True}
+
+
+class SetDatabasePasswordPayload(BaseModel):
+    password: str
+
+
 # ── Registration ───────────────────────────────────────────────────────────────
 class RegistrationBase(BaseModel):
     registration: str
