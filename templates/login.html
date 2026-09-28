@@ -355,7 +355,7 @@
       for (const d of databases) {
         const opt = document.createElement('option');
         opt.value = d.id;
-        opt.textContent = (d.is_default ? `${d.name} (LIVE)` : d.name) + (d.has_password ? ' 🔒' : '');
+        opt.textContent = (d.is_default ? `${d.name} (mặc định)` : d.name) + (d.has_password ? ' 🔒' : '');
         if (d.is_default) opt.selected = true;
         dbSelect.appendChild(opt);
       }
