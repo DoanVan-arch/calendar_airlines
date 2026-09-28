@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PikA - Pickleball Airways</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=78" />
+  <link rel="stylesheet" href="/static/css/style.css?v=81" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
 </head>
 <body>
@@ -234,6 +234,10 @@
             <input type="text" id="sectorFlightNum" placeholder="123" maxlength="6" style="border-radius:0 6px 6px 0;" />
           </div>
         </div>
+        <div class="form-group">
+          <label>Service code (SVC)</label>
+          <select id="sectorServiceCode"></select>
+        </div>
       </div>
       <div class="form-row">
         <div class="form-group">
@@ -391,6 +395,7 @@
         <button class="tab-btn" data-tab="tabBlockTime">Block Time</button>
         <button class="tab-btn" data-tab="tabAirports">Sân bay</button>
         <button class="tab-btn" data-tab="tabRegistration">Registration</button>
+        <button class="tab-btn" data-tab="tabServiceCode">Service Code</button>
         
         <button class="tab-btn admin-only" data-tab="tabSeasons">Mùa bay</button>
         <button class="tab-btn admin-only" data-tab="tabUsers">Người dùng</button>
@@ -486,6 +491,19 @@
         <table class="data-table" id="regTable">
           <thead><tr><th>Số đăng bạ</th><th>Mẫu máy bay</th><th>Số ghế</th><th>D/W</th><th>MTOW (Tấn)</th><th class="admin-only"></th></tr></thead>
           <tbody id="regTableBody"></tbody>
+        </table>
+      </div>
+      </div>
+
+      <!-- Service Code tab -->
+      <div class="tab-content" id="tabServiceCode">
+        <div class="table-toolbar">
+          <button class="btn btn-success btn-sm admin-only" id="btnAddServiceCode"><i class="fas fa-plus"></i> Thêm</button>
+        </div>
+         <div class="table-wrapper">
+        <table class="data-table" id="svcCodeTable">
+          <thead><tr><th>Mã</th><th>Trạng thái</th><th class="admin-only"></th></tr></thead>
+          <tbody id="svcCodeTableBody"></tbody>
         </table>
       </div>
       </div>
@@ -653,6 +671,13 @@
             <option value="domestic">Nội địa</option>
             <option value="international">Quốc tế</option>
           </select>
+        </div>
+        <div class="form-group">
+          <label>Service code (SVC)</label>
+          <select id="expServiceCode" multiple size="3" style="height: auto; width: 100%;">
+            <!-- Options populated dynamically -->
+          </select>
+          <small style="font-size:10px;color:var(--text-muted);">Giữ Ctrl/Cmd để chọn nhiều, không chọn = Tất cả</small>
         </div>
         <div class="form-group" style="flex: 2;">
           <label>Tàu bay</label>
@@ -938,6 +963,31 @@
     <div class="modal-footer">
       <button class="btn btn-secondary" data-close="tatFormModal">Huỷ</button>
       <button class="btn btn-primary" id="btnSaveTAT">Lưu</button>
+    </div>
+  </div>
+</div>
+
+<!-- Service Code Form Modal -->
+<div class="modal-overlay hidden" id="svcCodeFormModal">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2 id="svcCodeFormTitle">Thêm Service Code</h2>
+      <button class="close-btn" data-close="svcCodeFormModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="svcCodeId" />
+      <div class="form-group">
+        <label>Mã <span class="required">*</span></label>
+        <input type="text" id="svcCodeCode" placeholder="J" maxlength="10" class="uppercase" />
+      </div>
+      <div class="form-group">
+        <label>Trạng thái <span class="required">*</span></label>
+        <input type="text" id="svcCodeStatus" placeholder="Regular" maxlength="100" />
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="svcCodeFormModal">Huỷ</button>
+      <button class="btn btn-primary" id="btnSaveServiceCode">Lưu</button>
     </div>
   </div>
 </div>
@@ -1349,10 +1399,10 @@
 </div>
 
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-<script src="/static/js/api.js?v=78"></script>
-<script src="/static/js/history.js?v=78"></script>
-<script src="/static/js/gantt.js?v=78"></script>
-<script src="/static/js/app.js?v=78"></script>
+<script src="/static/js/api.js?v=81"></script>
+<script src="/static/js/history.js?v=81"></script>
+<script src="/static/js/gantt.js?v=81"></script>
+<script src="/static/js/app.js?v=81"></script>
 <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
 
 <!-- ── Format Picker Modal (Import / Export) ─────────────────────────── -->

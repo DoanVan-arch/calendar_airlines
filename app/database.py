@@ -57,10 +57,45 @@ def get_session_factory(filename: str) -> sessionmaker:
     return factory
 
 
+DEFAULT_SERVICE_CODES = [
+    ("J", "Regular"),
+    ("C", "Charter"),
+    ("P", "Ferry"),
+]
+
+
 def create_database_file(filename: str) -> None:
-    """Create a new SQLite file (if missing) with the full app schema, no data."""
+    """Create a new SQLite file (if missing) with the full app schema, no data
+    (except a few required default reference rows, e.g. service codes).
+
+    Also safe to call repeatedly on an already-existing database file: it will
+    retrofit any missing tables/columns added by later features (e.g. adding
+    `service_code` to `flight_sectors`, or the `service_codes` table itself)
+    and seed default rows only if they are missing.
+    """
     eng = get_engine_for_file(filename)
     Base.metadata.create_all(bind=eng)
+
+    from sqlalchemy import text
+    with eng.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE flight_sectors ADD COLUMN service_code VARCHAR(10) DEFAULT 'J'"))
+            conn.commit()
+        except Exception:
+            pass  # column already exists
+
+    # Local import to avoid a circular import between database.py and models.py
+    from .models import ServiceCode
+
+    factory = get_session_factory(filename)
+    session = factory()
+    try:
+        if session.query(ServiceCode).count() == 0:
+            for code, status in DEFAULT_SERVICE_CODES:
+                session.add(ServiceCode(code=code, status=status))
+            session.commit()
+    finally:
+        session.close()
 
 
 def drop_database_cache(filename: str) -> None:

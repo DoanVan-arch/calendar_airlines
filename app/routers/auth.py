@@ -7,9 +7,18 @@ The first admin account is bootstrapped from environment variables:
   APP_PASSWORD  (default: admin123)
 
 Roles:
-  admin  – full read/write access
-  mod    – write access to sectors/maintenance/seasons/swaps, read-only for rules
-  viewer – read-only (cannot add/edit/delete)
+  admin  – full read/write access, everywhere (all databases, users, db registry)
+  mod    – permission depends on the currently selected database:
+             - on the default/master database (airline_schedule.db): read-only,
+               can export, and can create flight sectors (covers copy/paste of
+               sectors) — but cannot edit/delete/cancel/restore/swap sectors,
+               and cannot write to aircraft/rules/maintenance/seasons/notes.
+             - on any other (demo) database: full read/write access, same as admin,
+               for all content-management endpoints (sectors, aircraft, rules,
+               maintenance, seasons, notes, service codes, etc). Mod can NEVER
+               manage users or the database registry itself, regardless of
+               which database is selected — that remains admin-only.
+  viewer – read-only everywhere (cannot add/edit/delete)
 
 Sessions are stored in a server-side dict (sufficient for single-process deployment).
 """
@@ -76,18 +85,57 @@ def get_current_role(request: Request) -> str:
     return sess["role"] if sess else ""
 
 
+def is_master_db_session(request: Request) -> bool:
+    """True if the current session's selected database is the default/master one."""
+    sess = get_session(request)
+    db_filename = (sess or {}).get("db_filename") or MASTER_DB_FILENAME
+    return db_filename == MASTER_DB_FILENAME
+
+
 def require_admin(request: Request) -> None:
-    """Raise 403 if the current user is not admin."""
+    """Raise 403 if the current user is not admin.
+
+    This is strictly for user-management / database-registry endpoints, which
+    stay admin-only regardless of which database is currently selected.
+    """
     sess = get_session(request)
     if not sess or sess.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Chỉ admin mới có quyền thực hiện thao tác này.")
 
 
 def require_mod_or_admin(request: Request) -> None:
-    """Raise 403 if the current user is not admin or mod."""
+    """Raise 403 if the current user is not admin or mod.
+
+    Use only for actions that mod should always be allowed to do, on any
+    database (e.g. creating a sector, which covers copy/paste on the master DB).
+    """
     sess = get_session(request)
     if not sess or sess.get("role") not in ("admin", "mod"):
         raise HTTPException(status_code=403, detail="Bạn không có quyền thực hiện thao tác này.")
+
+
+def require_editor(request: Request) -> None:
+    """Raise 403 unless the user has full write/edit access to the currently
+    selected database's content (aircraft, sectors edits/deletes, rules,
+    maintenance, seasons, notes, imports, etc).
+
+    - admin: always allowed.
+    - mod: allowed only when NOT on the default/master database (i.e. on a
+      demo database, mod gets full admin-equivalent content permissions).
+    - viewer / mod-on-master: denied.
+    """
+    sess = get_session(request)
+    role = sess.get("role") if sess else None
+    if role == "admin":
+        return
+    if role == "mod" and not is_master_db_session(request):
+        return
+    if is_master_db_session(request) and role == "mod":
+        raise HTTPException(
+            status_code=403,
+            detail="Tài khoản Mod chỉ được xem và xuất dữ liệu trên cơ sở dữ liệu chính (chỉ được copy/paste chặng bay).",
+        )
+    raise HTTPException(status_code=403, detail="Bạn không có quyền thực hiện thao tác này.")
 
 
 # ── Bootstrap first admin user ─────────────────────────────────────────────────
@@ -109,7 +157,7 @@ def ensure_default_database(db: Session) -> AppDatabase:
     row = db.query(AppDatabase).filter(AppDatabase.filename == MASTER_DB_FILENAME).first()
     if not row:
         row = AppDatabase(
-            name="Airline Schedule (Mặc định)",
+            name="Airline Schedule (LIVE)",
             filename=MASTER_DB_FILENAME,
             is_default=True,
         )
@@ -217,6 +265,7 @@ def me(request: Request):
             "username": sess["username"],
             "role": sess["role"],
             "db_filename": sess.get("db_filename"),
+            "is_master_db": is_master_db_session(request),
         }
     raise HTTPException(status_code=401, detail="Not authenticated")
 
@@ -282,7 +331,7 @@ def delete_database(request: Request, database_id: int, db: Session = Depends(ge
     if not row:
         raise HTTPException(404, "Không tìm thấy database")
     if row.is_default:
-        raise HTTPException(400, "Không thể xóa database mặc định")
+        raise HTTPException(400, "Không thể xóa database LIVE")
     filename = row.filename
     db.delete(row)
     db.commit()

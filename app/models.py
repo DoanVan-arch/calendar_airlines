@@ -48,6 +48,15 @@ class FlightSector(Base):
     status = Column(String(20), default="active")  # active | cancelled
     sequence = Column(Integer, default=0)
     color = Column(String(20), nullable=True)      # override color for this sector
+    service_code = Column(String(10), default="J", nullable=True)  # J=Regular, C=Charter, P=Ferry (references service_codes.code)
+
+
+class ServiceCode(Base):
+    """Service code (loại chuyến bay): J=Regular, C=Charter, P=Ferry, etc."""
+    __tablename__ = "service_codes"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    code = Column(String(10), unique=True, nullable=False)     # e.g. "J"
+    status = Column(String(100), nullable=False)               # e.g. "Regular"
 
 
 class BlockTimeRule(Base):

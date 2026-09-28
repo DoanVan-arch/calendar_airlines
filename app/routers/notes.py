@@ -9,6 +9,7 @@ from sqlalchemy import or_, and_
 from ..database import get_db
 from ..models import CalendarNote
 from ..schemas import CalendarNoteCreate, CalendarNoteUpdate, CalendarNoteOut
+from .auth import require_editor
 
 router = APIRouter()
 
@@ -80,7 +81,8 @@ def list_notes(
 
 
 @router.post("/", response_model=CalendarNoteOut, status_code=201)
-def create_note(payload: CalendarNoteCreate, db: Session = Depends(get_db)):
+def create_note(request: Request, payload: CalendarNoteCreate, db: Session = Depends(get_db)):
+    require_editor(request)
     note = CalendarNote(**payload.model_dump())
     db.add(note)
     db.commit()
@@ -89,7 +91,8 @@ def create_note(payload: CalendarNoteCreate, db: Session = Depends(get_db)):
 
 
 @router.put("/{note_id}", response_model=CalendarNoteOut)
-def update_note(note_id: int, payload: CalendarNoteUpdate, db: Session = Depends(get_db)):
+def update_note(request: Request, note_id: int, payload: CalendarNoteUpdate, db: Session = Depends(get_db)):
+    require_editor(request)
     note = db.query(CalendarNote).filter(CalendarNote.id == note_id).first()
     if not note:
         raise HTTPException(404, "Không tìm thấy ghi chú")
@@ -102,7 +105,8 @@ def update_note(note_id: int, payload: CalendarNoteUpdate, db: Session = Depends
 
 
 @router.delete("/{note_id}", status_code=204)
-def delete_note(note_id: int, db: Session = Depends(get_db)):
+def delete_note(request: Request, note_id: int, db: Session = Depends(get_db)):
+    require_editor(request)
     note = db.query(CalendarNote).filter(CalendarNote.id == note_id).first()
     if not note:
         raise HTTPException(404, "Không tìm thấy ghi chú")

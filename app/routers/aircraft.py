@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from typing import List
 
 from ..database import get_db
 from ..models import Aircraft, FlightSector, Registration
 from ..schemas import AircraftCreate, AircraftUpdate, AircraftOut
+from .auth import require_editor
 
 router = APIRouter()
 
@@ -42,7 +43,8 @@ def list_aircraft(db: Session = Depends(get_db)):
 
 
 @router.post("/", response_model=AircraftOut, status_code=201)
-def create_aircraft(payload: AircraftCreate, db: Session = Depends(get_db)):
+def create_aircraft(request: Request, payload: AircraftCreate, db: Session = Depends(get_db)):
+    require_editor(request)
     existing = db.query(Aircraft).filter(Aircraft.registration == payload.registration).first()
     if existing:
         raise HTTPException(400, f"Registration '{payload.registration}' already exists")
@@ -63,7 +65,8 @@ def create_aircraft(payload: AircraftCreate, db: Session = Depends(get_db)):
 
 
 @router.put("/{aircraft_id}", response_model=AircraftOut)
-def update_aircraft(aircraft_id: int, payload: AircraftUpdate, db: Session = Depends(get_db)):
+def update_aircraft(request: Request, aircraft_id: int, payload: AircraftUpdate, db: Session = Depends(get_db)):
+    require_editor(request)
     ac = db.query(Aircraft).filter(Aircraft.id == aircraft_id).first()
     if not ac:
         raise HTTPException(404, "Aircraft not found")
@@ -84,7 +87,8 @@ def update_aircraft(aircraft_id: int, payload: AircraftUpdate, db: Session = Dep
 
 
 @router.delete("/{aircraft_id}", status_code=204)
-def delete_aircraft(aircraft_id: int, db: Session = Depends(get_db)):
+def delete_aircraft(request: Request, aircraft_id: int, db: Session = Depends(get_db)):
+    require_editor(request)
     ac = db.query(Aircraft).filter(Aircraft.id == aircraft_id).first()
     if not ac:
         raise HTTPException(404, "Aircraft not found")
@@ -95,8 +99,9 @@ def delete_aircraft(aircraft_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/reorder/batch", status_code=200)
-def reorder_aircraft(order: List[dict], db: Session = Depends(get_db)):
+def reorder_aircraft(request: Request, order: List[dict], db: Session = Depends(get_db)):
     """Accepts [{id, line_order}, ...] and updates line_order for each aircraft."""
+    require_editor(request)
     for item in order:
         ac = db.query(Aircraft).filter(Aircraft.id == item["id"]).first()
         if ac:

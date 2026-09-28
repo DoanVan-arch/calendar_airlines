@@ -140,8 +140,16 @@ def seed_demo_databases(db):
             db.add(AppDatabase(name=f"Demo {i}", filename=filename, is_default=False))
             db.commit()
         elif not os.path.exists(os.path.join(BASE_DIR, filename)):
-            # Registry row exists but the file was removed externally — recreate it empty.
+            # Registry row exists but the file was removed externally - recreate it empty.
             create_database_file(filename)
+
+    # Retrofit schema (new tables/columns) + seed required default rows (e.g. service
+    # codes) into every registered database, including ones created before a given
+    # feature existed. create_database_file() is idempotent/safe to re-run.
+    for row in db.query(AppDatabase).all():
+        create_database_file(row.filename)
+
+
 
 
 @asynccontextmanager

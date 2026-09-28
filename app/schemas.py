@@ -82,6 +82,7 @@ class FlightSectorBase(BaseModel):
     status: str = "active"
     sequence: int = 0
     color: Optional[str] = None
+    service_code: str = "J"   # J=Regular, C=Charter, P=Ferry (see ServiceCode table)
 
     @field_validator("dep_utc", "arr_utc")
     @classmethod
@@ -106,6 +107,7 @@ class FlightSectorUpdate(BaseModel):
     status: Optional[str] = None
     sequence: Optional[int] = None
     color: Optional[str] = None
+    service_code: Optional[str] = None
 
 
 class FlightSectorOut(FlightSectorBase):
@@ -143,6 +145,21 @@ class TATRuleCreate(TATRuleBase):
 
 
 class TATRuleOut(TATRuleBase):
+    id: int
+    model_config = {"from_attributes": True}
+
+
+# ── Service code ───────────────────────────────────────────────────────────────
+class ServiceCodeBase(BaseModel):
+    code: str
+    status: str
+
+
+class ServiceCodeCreate(ServiceCodeBase):
+    pass
+
+
+class ServiceCodeOut(ServiceCodeBase):
     id: int
     model_config = {"from_attributes": True}
 
@@ -217,6 +234,7 @@ class TimetableExportParams(BaseModel):
     period_start: str            # YYYY-MM-DD
     period_end: str              # YYYY-MM-DD
     timezone: str = "LCT"        # "LCT" | "UTC"
+    service_codes: Optional[List[str]] = None   # filter by service codes (J/C/P/...), None/empty = all
 
 
 class ReportParams(BaseModel):

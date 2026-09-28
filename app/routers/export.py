@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Body, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Body, UploadFile, File, Request
 from fastapi.responses import JSONResponse
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -10,8 +10,9 @@ import json
 from ..database import get_db
 from ..models import (FlightSector, Aircraft, Airport, BlockTimeRule, TATRule,
                       Registration, Season, MaintenanceBlock, CalendarNote,
-                      RouteColor, AppSetting, User)
+                      RouteColor, AppSetting, User, ServiceCode)
 from ..schemas import TimetableExportParams, ReportParams, ImportPayload
+from .auth import require_editor
 
 router = APIRouter()
 import io
@@ -93,6 +94,7 @@ def fmt_display(sector: FlightSector, timezone: str, airports: dict) -> dict:
         "flight_number": sector.flight_number,
         "status": sector.status,
         "day_of_week": str(dow),
+        "service_code": sector.service_code or "J",
     }
 
 
@@ -150,6 +152,9 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
         .all()
     )
     sectors = [s for s in sectors if s.aircraft_id not in tam_ids]
+    if params.service_codes:
+        wanted = set(params.service_codes)
+        sectors = [s for s in sectors if (s.service_code or "J") in wanted]
 
     airports = {ap.code: ap for ap in db.query(Airport).all()}
     aircraft_map = {ac.id: ac for ac in db.query(Aircraft).all()}
@@ -182,13 +187,14 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
     for r in rows:
         ac = aircraft_map.get(r["aircraft_id"])
         r["aircraft_reg"] = ac.registration if ac else "?"
+        r["aircraft_type"] = ac.ac_type if ac else ""
         r["line_order"] = ac.line_order if ac else 0
         # Seats from linked registration
         reg = reg_map.get(ac.registration_id) if ac and ac.registration_id else None
         r["seats"] = reg.seats if reg else 0
 
     if params.mode == "daily":
-        # Merge identical sectors: group by (aircraft_id, route, dep_utc, arr_utc, flight_number)
+        # Merge identical sectors: group by (aircraft_id, route, dep_utc, arr_utc, flight_number, service_code)
         merged: dict = defaultdict(lambda: {"dates": [], "dows": set()})
         for r in rows:
             key = (
@@ -197,6 +203,7 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
                 r["dep_utc"],
                 r["arr_utc"],
                 r.get("flight_number") or "",
+                r.get("service_code") or "J",
             )
             merged[key]["dates"].append(r["flight_date"])
             merged[key]["dows"].add(int(r["day_of_week"]))
@@ -225,7 +232,7 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
     # GROUP mode – group by (origin, destination, dep_display [UTC hour:min key])
     grouped: dict = defaultdict(lambda: {"dates": [], "aircraft": set(), "dows": set(), "total_seats": 0, "min_line_order": 9999})
     for r in rows:
-        key = f"{r['origin']}-{r['destination']}|{r['dep_utc']}|{r['arr_utc']}"
+        key = f"{r['origin']}-{r['destination']}|{r['dep_utc']}|{r['arr_utc']}|{r.get('service_code') or 'J'}"
         grouped[key]["dates"].append(r["flight_date"])
         grouped[key]["aircraft"].add(r["aircraft_reg"])
         grouped[key]["dows"].add(int(r["day_of_week"]))
@@ -241,6 +248,7 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
             "arr_display": r["arr_display"],
             "block_time_minutes": r["block_time_minutes"],
             "timezone": params.timezone,
+            "service_code": r.get("service_code") or "J",
         })
 
     group_rows = []
@@ -264,6 +272,7 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
             "timezone": params.timezone,
             "total_seats": grp["total_seats"],
             "line_order": grp["min_line_order"],
+            "service_code": grp.get("service_code", "J"),
         })
 
     group_rows.sort(key=lambda r: (r["origin"], r["destination"], r["dep_utc"]))
@@ -544,7 +553,8 @@ def export_schedule(db: Session = Depends(get_db)):
 
 # ── Import ─────────────────────────────────────────────────────────────────────
 @router.post("/import")
-def import_schedule(payload: dict = Body(...), db: Session = Depends(get_db)):
+def import_schedule(request: Request, payload: dict = Body(...), db: Session = Depends(get_db)):
+    require_editor(request)
     replace_all = payload.get("replace_all", False)
 
     if replace_all:
@@ -907,16 +917,20 @@ def export_schedule(db: Session = Depends(get_db)):
     # Sectors
     sectors = db.query(FlightSector).all()
     aircraft_reg_by_id = {a.id: a.registration for a in aircraft}
+    aircraft_type_by_id = {a.id: (a.ac_type or "") for a in aircraft}
     _write_sheet(wb, "sectors",
-                 ["id", "aircraft_id", "registration", "flight_date", "origin", "destination",
-                  "dep_utc", "arr_utc", "flight_number", "status", "sequence", "color"],
+                 ["id", "aircraft_id", "registration", "aircraft_type", "flight_date", "origin",
+                  "destination", "dep_utc", "arr_utc", "flight_number", "status", "sequence",
+                  "color", "service_code"],
                  [{"id": s.id, "aircraft_id": s.aircraft_id,
                    "registration": aircraft_reg_by_id.get(s.aircraft_id, ""),
+                   "aircraft_type": aircraft_type_by_id.get(s.aircraft_id, ""),
                    "flight_date": s.flight_date,
                    "origin": s.origin, "destination": s.destination,
                    "dep_utc": s.dep_utc, "arr_utc": s.arr_utc,
                    "flight_number": s.flight_number, "status": s.status,
-                   "sequence": s.sequence, "color": s.color}
+                   "sequence": s.sequence, "color": s.color,
+                   "service_code": s.service_code or "J"}
                   for s in sectors])
 
     # Block-time rules
@@ -934,6 +948,12 @@ def export_schedule(db: Session = Depends(get_db)):
                  [{"station": r.station, "min_tat_minutes": r.min_tat_minutes,
                    "is_domestic": r.is_domestic}
                   for r in tat_rules])
+
+    # Service codes
+    service_codes = db.query(ServiceCode).all()
+    _write_sheet(wb, "service_codes",
+                 ["code", "status"],
+                 [{"code": sc.code, "status": sc.status} for sc in service_codes])
 
     # Seasons
     seasons = db.query(Season).all()
@@ -1004,10 +1024,12 @@ def export_schedule(db: Session = Depends(get_db)):
 
 @router.post("/importxlsx")
 async def import_schedule(
+    request: Request,
     file: UploadFile = File(...),
     replace_all: bool = False,
     db: Session = Depends(get_db),
 ):
+    require_editor(request)
     content = await file.read()
     wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
 
@@ -1198,6 +1220,7 @@ async def import_schedule(
                 status=s.get("status") or "active",
                 sequence=int(s["sequence"]) if s.get("sequence") is not None else 0,
                 color=s.get("color"),
+                service_code=(str(s.get("service_code")).upper().strip() if s.get("service_code") else "J"),
             ))
             sector_imported += 1
         except Exception as e:
@@ -1232,6 +1255,19 @@ async def import_schedule(
             db.add(TATRule(station=station,
                            min_tat_minutes=r.get("min_tat_minutes", 40),
                            is_domestic=r.get("is_domestic")))
+
+    # ── Service codes ─────────────────────────────────────────────────────────
+    for r in _read_sheet(wb, "service_codes"):
+        code_val = r.get("code")
+        if not code_val:
+            continue
+        code = str(code_val).upper().strip()
+        existing = db.query(ServiceCode).filter(ServiceCode.code == code).first()
+        if existing:
+            if r.get("status"):
+                existing.status = r["status"]
+        else:
+            db.add(ServiceCode(code=code, status=r.get("status") or code))
 
     # ── Seasons ───────────────────────────────────────────────────────────────
     for s in _read_sheet(wb, "seasons"):

@@ -8,7 +8,7 @@ import datetime
 import openpyxl
 
 from ..database import get_db
-from ..models import TATRule, BlockTimeRule, Airport, Registration, RouteColor, AppSetting, RosterRule
+from ..models import TATRule, BlockTimeRule, Airport, Registration, RouteColor, AppSetting, RosterRule, ServiceCode
 from ..schemas import (
     TATRuleCreate, TATRuleOut,
     BlockTimeRuleCreate, BlockTimeRuleOut,
@@ -16,8 +16,9 @@ from ..schemas import (
     RegistrationCreate, RegistrationUpdate, RegistrationOut,
     RouteColorCreate, RouteColorOut,
     RosterRuleCreate, RosterRuleOut,
+    ServiceCodeCreate, ServiceCodeOut,
 )
-from .auth import require_admin
+from .auth import require_editor
 
 router = APIRouter()
 
@@ -30,7 +31,7 @@ def list_airports(db: Session = Depends(get_db)):
 
 @router.post("/airports", response_model=AirportOut, status_code=201)
 def create_airport(request: Request, payload: AirportCreate, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_editor(request)
     existing = db.query(Airport).filter(Airport.code == payload.code.upper()).first()
     if existing:
         raise HTTPException(400, f"Airport '{payload.code}' already exists")
@@ -45,7 +46,7 @@ def create_airport(request: Request, payload: AirportCreate, db: Session = Depen
 
 @router.put("/airports/{code}", response_model=AirportOut)
 def update_airport(request: Request, code: str, payload: AirportCreate, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_editor(request)
     ap = db.query(Airport).filter(Airport.code == code.upper()).first()
     if not ap:
         raise HTTPException(404, "Airport not found")
@@ -61,7 +62,7 @@ def update_airport(request: Request, code: str, payload: AirportCreate, db: Sess
 
 @router.delete("/airports/{code}", status_code=204)
 def delete_airport(request: Request, code: str, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_editor(request)
     ap = db.query(Airport).filter(Airport.code == code.upper()).first()
     if not ap:
         raise HTTPException(404, "Airport not found")
@@ -96,7 +97,7 @@ def get_mass_tat(db: Session = Depends(get_db)):
 @router.put("/tat/mass")
 def set_mass_tat(request: Request, payload: dict, db: Session = Depends(get_db)):
     """Save mass TAT defaults. Expects {domestic: int, international: int, dom_to_intl: int, intl_to_dom: int}."""
-    require_admin(request)
+    require_editor(request)
     for key, station in [("domestic", "__DOMESTIC__"), ("international", "__INTL__"),
                          ("dom_to_intl", "__DOM_TO_INTL__"), ("intl_to_dom", "__INTL_TO_DOM__")]:
         minutes = payload.get(key)
@@ -113,7 +114,7 @@ def set_mass_tat(request: Request, payload: dict, db: Session = Depends(get_db))
 
 @router.post("/tat", response_model=TATRuleOut, status_code=201)
 def create_tat_rule(request: Request, payload: TATRuleCreate, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_editor(request)
     existing = db.query(TATRule).filter(TATRule.station == payload.station.upper()).first()
     if existing:
         existing.min_tat_minutes = payload.min_tat_minutes
@@ -134,7 +135,7 @@ def create_tat_rule(request: Request, payload: TATRuleCreate, db: Session = Depe
 
 @router.put("/tat/{rule_id}", response_model=TATRuleOut)
 def update_tat_rule(request: Request, rule_id: int, payload: TATRuleCreate, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_editor(request)
     rule = db.query(TATRule).filter(TATRule.id == rule_id).first()
     if not rule:
         raise HTTPException(404, "TAT rule not found")
@@ -148,7 +149,7 @@ def update_tat_rule(request: Request, rule_id: int, payload: TATRuleCreate, db: 
 
 @router.delete("/tat/{rule_id}", status_code=204)
 def delete_tat_rule(request: Request, rule_id: int, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_editor(request)
     rule = db.query(TATRule).filter(TATRule.id == rule_id).first()
     if not rule:
         raise HTTPException(404, "TAT rule not found")
@@ -164,7 +165,7 @@ def list_block_time_rules(db: Session = Depends(get_db)):
 
 @router.post("/blocktime", response_model=BlockTimeRuleOut, status_code=201)
 def create_block_time_rule(request: Request, payload: BlockTimeRuleCreate, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_editor(request)
     orig = payload.origin.upper()
     dest = payload.destination.upper()
     existing = db.query(BlockTimeRule).filter(
@@ -181,7 +182,7 @@ def create_block_time_rule(request: Request, payload: BlockTimeRuleCreate, db: S
 
 @router.put("/blocktime/{rule_id}", response_model=BlockTimeRuleOut)
 def update_block_time_rule(request: Request, rule_id: int, payload: BlockTimeRuleCreate, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_editor(request)
     rule = db.query(BlockTimeRule).filter(BlockTimeRule.id == rule_id).first()
     if not rule:
         raise HTTPException(404, "Block-time rule not found")
@@ -207,7 +208,7 @@ def update_block_time_rule(request: Request, rule_id: int, payload: BlockTimeRul
 
 @router.delete("/blocktime/{rule_id}", status_code=204)
 def delete_block_time_rule(request: Request, rule_id: int, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_editor(request)
     rule = db.query(BlockTimeRule).filter(BlockTimeRule.id == rule_id).first()
     if not rule:
         raise HTTPException(404, "Block-time rule not found")
@@ -314,7 +315,7 @@ def export_tat_excel(db: Session = Depends(get_db)):
 
 @router.post("/tat/import")
 async def import_tat_excel(request: Request, file: UploadFile = File(...), db: Session = Depends(get_db)):
-    require_admin(request)
+    require_editor(request)
     content = await file.read()
     wb = openpyxl.load_workbook(io.BytesIO(content))
     ws = _find_import_sheet(wb, "TAT Rules")
@@ -383,7 +384,7 @@ def export_blocktime_excel(db: Session = Depends(get_db)):
 
 @router.post("/blocktime/import")
 async def import_blocktime_excel(request: Request, file: UploadFile = File(...), db: Session = Depends(get_db)):
-    require_admin(request)
+    require_editor(request)
     content = await file.read()
     wb = openpyxl.load_workbook(io.BytesIO(content))
     ws = _find_import_sheet(wb, "Block Time Rules")
@@ -439,7 +440,7 @@ def list_registrations(db: Session = Depends(get_db)):
 
 @router.post("/registration", response_model=RegistrationOut, status_code=201)
 def create_registration(request: Request, payload: RegistrationCreate, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_editor(request)
     reg = payload.registration.upper()
     existing = db.query(Registration).filter(Registration.registration == reg).first()
     if existing:
@@ -453,7 +454,7 @@ def create_registration(request: Request, payload: RegistrationCreate, db: Sessi
 
 @router.put("/registration/{reg_id}", response_model=RegistrationOut)
 def update_registration(request: Request, reg_id: int, payload: RegistrationUpdate, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_editor(request)
     r = db.query(Registration).filter(Registration.id == reg_id).first()
     if not r:
         raise HTTPException(404, "Registration not found")
@@ -466,7 +467,7 @@ def update_registration(request: Request, reg_id: int, payload: RegistrationUpda
 
 @router.delete("/registration/{reg_id}", status_code=204)
 def delete_registration(request: Request, reg_id: int, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_editor(request)
     r = db.query(Registration).filter(Registration.id == reg_id).first()
     if not r:
         raise HTTPException(404, "Registration not found")
@@ -524,7 +525,7 @@ def export_registration_csv(db: Session = Depends(get_db)):
 
 @router.post("/registration/import/excel")
 async def import_registration_excel(request: Request, file: UploadFile = File(...), db: Session = Depends(get_db)):
-    require_admin(request)
+    require_editor(request)
     content = await file.read()
     wb = openpyxl.load_workbook(io.BytesIO(content))
     ws = _find_import_sheet(wb, "Registrations")
@@ -582,7 +583,7 @@ def list_route_colors(db: Session = Depends(get_db)):
 
 @router.post("/route-colors", response_model=RouteColorOut, status_code=201)
 def create_route_color(request: Request, payload: RouteColorCreate, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_editor(request)
     orig = payload.origin.upper().strip()
     dest = payload.destination.upper().strip()
     existing = db.query(RouteColor).filter(
@@ -603,7 +604,7 @@ def create_route_color(request: Request, payload: RouteColorCreate, db: Session 
 
 @router.put("/route-colors/{rc_id}", response_model=RouteColorOut)
 def update_route_color(request: Request, rc_id: int, payload: RouteColorCreate, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_editor(request)
     rc = db.query(RouteColor).filter(RouteColor.id == rc_id).first()
     if not rc:
         raise HTTPException(404, "Route color not found")
@@ -617,7 +618,7 @@ def update_route_color(request: Request, rc_id: int, payload: RouteColorCreate, 
 
 @router.patch("/route-colors/{rc_id}", response_model=RouteColorOut)
 def toggle_route_color_enabled(request: Request, rc_id: int, payload: dict, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_editor(request)
     rc = db.query(RouteColor).filter(RouteColor.id == rc_id).first()
     if not rc:
         raise HTTPException(404, "Route color not found")
@@ -632,7 +633,7 @@ def toggle_route_color_enabled(request: Request, rc_id: int, payload: dict, db: 
 
 @router.delete("/route-colors/{rc_id}", status_code=204)
 def delete_route_color(request: Request, rc_id: int, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_editor(request)
     rc = db.query(RouteColor).filter(RouteColor.id == rc_id).first()
     if not rc:
         raise HTTPException(404, "Route color not found")
@@ -649,7 +650,7 @@ def get_setting(key: str, db: Session = Depends(get_db)):
 
 @router.put("/settings/{key}")
 def set_setting(request: Request, key: str, payload: dict, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_editor(request)
     value = payload.get("value")
     s = db.query(AppSetting).filter(AppSetting.key == key).first()
     if s:
@@ -668,7 +669,7 @@ def list_roster_rules(db: Session = Depends(get_db)):
 
 @router.post("/roster", response_model=RosterRuleOut, status_code=201)
 def create_roster_rule(request: Request, payload: RosterRuleCreate, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_editor(request)
     r = RosterRule(**payload.model_dump())
     db.add(r)
     db.commit()
@@ -678,7 +679,7 @@ def create_roster_rule(request: Request, payload: RosterRuleCreate, db: Session 
 
 @router.put("/roster/{rule_id}", response_model=RosterRuleOut)
 def update_roster_rule(request: Request, rule_id: int, payload: RosterRuleCreate, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_editor(request)
     r = db.query(RosterRule).filter(RosterRule.id == rule_id).first()
     if not r:
         raise HTTPException(404, "Roster rule not found")
@@ -691,9 +692,58 @@ def update_roster_rule(request: Request, rule_id: int, payload: RosterRuleCreate
 
 @router.delete("/roster/{rule_id}", status_code=204)
 def delete_roster_rule(request: Request, rule_id: int, db: Session = Depends(get_db)):
-    require_admin(request)
+    require_editor(request)
     r = db.query(RosterRule).filter(RosterRule.id == rule_id).first()
     if not r:
         raise HTTPException(404, "Roster rule not found")
     db.delete(r)
+    db.commit()
+
+
+# ── Service Codes ──────────────────────────────────────────────────────────────
+@router.get("/service-codes", response_model=List[ServiceCodeOut])
+def list_service_codes(db: Session = Depends(get_db)):
+    return db.query(ServiceCode).order_by(ServiceCode.code).all()
+
+
+@router.post("/service-codes", response_model=ServiceCodeOut, status_code=201)
+def create_service_code(request: Request, payload: ServiceCodeCreate, db: Session = Depends(get_db)):
+    require_editor(request)
+    code = payload.code.upper().strip()
+    if not code:
+        raise HTTPException(400, "Mã service code không được để trống")
+    existing = db.query(ServiceCode).filter(ServiceCode.code == code).first()
+    if existing:
+        raise HTTPException(400, f"Service code '{code}' đã tồn tại")
+    sc = ServiceCode(code=code, status=payload.status.strip())
+    db.add(sc)
+    db.commit()
+    db.refresh(sc)
+    return sc
+
+
+@router.put("/service-codes/{sc_id}", response_model=ServiceCodeOut)
+def update_service_code(request: Request, sc_id: int, payload: ServiceCodeCreate, db: Session = Depends(get_db)):
+    require_editor(request)
+    sc = db.query(ServiceCode).filter(ServiceCode.id == sc_id).first()
+    if not sc:
+        raise HTTPException(404, "Service code not found")
+    code = payload.code.upper().strip()
+    dup = db.query(ServiceCode).filter(ServiceCode.code == code, ServiceCode.id != sc_id).first()
+    if dup:
+        raise HTTPException(400, f"Service code '{code}' đã tồn tại")
+    sc.code = code
+    sc.status = payload.status.strip()
+    db.commit()
+    db.refresh(sc)
+    return sc
+
+
+@router.delete("/service-codes/{sc_id}", status_code=204)
+def delete_service_code(request: Request, sc_id: int, db: Session = Depends(get_db)):
+    require_editor(request)
+    sc = db.query(ServiceCode).filter(ServiceCode.id == sc_id).first()
+    if not sc:
+        raise HTTPException(404, "Service code not found")
+    db.delete(sc)
     db.commit()

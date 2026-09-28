@@ -13,11 +13,13 @@ const state = {
   warnings    : [],
   seasons     : [],             // Season objects from API
   registrations: [],            // Registration objects from API
+  serviceCodes: [],             // ServiceCode objects from API ({id, code, status})
   maintenance : [],             // MaintenanceBlock objects
   currentSeason: null,          // currently active Season or null
   lastExportData : null,
   lastReportData : null,
-  userRole    : "viewer",       // "admin" | "viewer" — loaded from /api/auth/me
+  userRole    : "viewer",       // "admin" | "mod" | "viewer" — loaded from /api/auth/me
+  isMasterDb  : true,           // true if currently selected DB is the default/master one
   username    : "",
   clipboard   : null,           // { type:'sectors'|'line', sectors:[...], sourceAcId, sourceDate }
   routeColors : {},             // keyed by "ORIG-DEST" → color string
@@ -157,6 +159,7 @@ function downloadExcel(data, filename) {
         "Tàu":              acDisplay,
         "Chặng bay":        showRoute ? route : "",
         "Chuyến":           r.flight_number || "",
+        "SVC":              r.service_code || "J",
         [`Cất (${tz})`]:   r.dep_display,
         [`Hạ (${tz})`]:    r.arr_display,
         "Block":            minToHHMM(r.block_time_minutes),
@@ -174,6 +177,7 @@ function downloadExcel(data, filename) {
         "Tàu":              r.aircraft_reg,
         "Chặng bay":        r.route || (r.origin + "-" + r.destination),
         "Chuyến":           r.flight_number || "",
+        "SVC":              r.service_code || "J",
         [`Cất (${tz})`]:   r.dep_display,
         [`Hạ (${tz})`]:    r.arr_display,
         "Block":            minToHHMM(r.block_time_minutes),
@@ -203,6 +207,7 @@ function downloadExcel(data, filename) {
         "Tàu":              r.aircraft ? r.aircraft.join(", ") : "",
         "Chặng bay":        r.route || (r.origin + "-" + r.destination),
         "Chuyến":           r.flight_number || "",
+        "SVC":              r.service_code || "J",
         [`Cất (${tz})`]:   r.dep_display,
         [`Hạ (${tz})`]:    r.arr_display,
         "Block":            minToHHMM(r.block_time_minutes),
@@ -368,6 +373,7 @@ async function loadCurrentUser() {
     state.userRole = me.role || "viewer";
     state.username = me.username || "";
     state.currentDbFilename = me.db_filename || "";
+    state.isMasterDb = me.is_master_db !== false; // default true (safe/restrictive) if missing
     applyRoleUI();
   } catch {}
 }
@@ -383,7 +389,7 @@ async function loadDatabaseSwitcher() {
     for (const d of dbs) {
       const opt = document.createElement("option");
       opt.value = d.id;
-      opt.textContent = d.is_default ? `${d.name} (mặc định)` : d.name;
+      opt.textContent = d.is_default ? `${d.name} (LIVE)` : d.name;
       if (d.filename === state.currentDbFilename) opt.selected = true;
       sel.appendChild(opt);
     }
@@ -411,26 +417,50 @@ async function switchDatabase(databaseId) {
   }
 }
 
-function applyRoleUI() {
+// "Editor" = full content write access (aircraft/sectors edits/rules/maintenance/
+// seasons/notes/imports). Admin always. Mod only when NOT on the master/default
+// database. Used both by applyRoleUI() (for element visibility) and by inline
+// action gates (context menu clicks, delete buttons, etc.) throughout the app.
+function isEditorRole() {
   const isAdmin = state.userRole === "admin";
   const isMod = state.userRole === "mod";
-  const canWrite = isAdmin || isMod;
-  
-  // Show/hide all .admin-only elements (for rules, user management, etc.)
+  return isAdmin || (isMod && !state.isMasterDb);
+}
+
+// "canCreateSector" = mod can always create sectors (covers copy/paste of
+// chặng bay), even on the master database.
+function canCreateSectorRole() {
+  return state.userRole === "admin" || state.userRole === "mod";
+}
+
+function applyRoleUI() {
+  const isAdmin = state.userRole === "admin";
+  const isEditor = isEditorRole();
+  const canCreateSector = canCreateSectorRole();
+
+  // Show/hide all .admin-only elements (rules CRUD, aircraft/season/maintenance
+  // add buttons, user & database management, etc.)
   document.querySelectorAll(".admin-only").forEach(el => {
+    el.style.display = isEditor ? "" : "none";
+  });
+
+  // Users & Database management stay strictly admin-only, regardless of the
+  // selected database or mod's editor status on demo DBs.
+  document.querySelectorAll('[data-tab="tabUsers"], [data-tab="tabDatabases"]').forEach(el => {
     el.style.display = isAdmin ? "" : "none";
   });
-  
-  // Show/hide toolbar buttons that require write access (admin or mod)
-  const writeToolbarBtns = ["btnAddAircraft", "btnAddSector"];
-  writeToolbarBtns.forEach(id => {
-    const el = doc(id);
-    if (el) el.style.display = canWrite ? "" : "none";
-  });
+
+  // Show/hide toolbar buttons that require write access.
+  // btnAddAircraft: full editor only (blocked for mod on master).
+  // btnAddSector: mod can always create sectors (copy/paste), so keep visible.
+  const el1 = doc("btnAddAircraft");
+  if (el1) el1.style.display = isEditor ? "" : "none";
+  const el2 = doc("btnAddSector");
+  if (el2) el2.style.display = canCreateSector ? "" : "none";
 }
 
 async function loadReferenceData() {
-  const [aircraft, airports, btRules, tatRules, massTAT, seasons, registrations, routeColors, rcEnabledSetting] = await Promise.all([
+  const [aircraft, airports, btRules, tatRules, massTAT, seasons, registrations, routeColors, rcEnabledSetting, serviceCodes] = await Promise.all([
     API.getAircraft(),
     API.getAirports(),
     API.getBlockTimeRules(),
@@ -440,6 +470,7 @@ async function loadReferenceData() {
     API.getRegistrations().catch(() => []),
     API.getRouteColors().catch(() => []),
     API.getSetting("route_color_enabled").catch(() => ({ key: "route_color_enabled", value: null })),
+    fetch("/api/rules/service-codes").then(r => r.json()).catch(() => []),
   ]);
 
   state.aircraft = aircraft;
@@ -456,6 +487,8 @@ async function loadReferenceData() {
   state.massTAT = massTAT;
   state.seasons = seasons;
   state.registrations = registrations;
+  state.serviceCodes = serviceCodes;
+  populateServiceCodeSelects();
 
   // Route colors map: "ORIG-DEST" → color (only enabled ones)
   state.routeColors = {};
@@ -737,7 +770,7 @@ async function renderSeasonTable() {
   state.seasons = seasons;
   updateSeasonBadge();
 
-  const isAdmin = state.userRole === "admin";
+  const isAdmin = isEditorRole();
   const tbody = doc("seasonTableBody");
   tbody.innerHTML = "";
   if (!seasons.length) {
@@ -1014,7 +1047,7 @@ async function refreshWeekView() {
         bar.style.borderLeft = `3px solid ${mx.color || "#f59e0b"}`;
         bar.textContent = mx.label || "MX";
         bar.title = `Bảo dưỡng: ${mx.label || "Maintenance"} (${mx.start_date}→${mx.end_date})`;
-        if (state.userRole === "admin" || state.userRole === "mod") {
+        if (isEditorRole()) {
           bar.addEventListener("click", e => {
             e.stopPropagation();
             openMaintenanceModal(mx);
@@ -1154,7 +1187,7 @@ async function refreshMonthView() {
         bar.style.borderLeft  = `3px solid ${mx.color || "#f59e0b"}`;
         bar.title = `${ac.registration}: ${mx.label || "Maintenance"} (${mx.start_date}→${mx.end_date})`;
         bar.textContent = `${ac.registration} – ${mx.label || "MX"}`;
-        if (state.userRole === "admin" || state.userRole === "mod") {
+        if (isEditorRole()) {
           bar.addEventListener("click", e => {
             e.stopPropagation();
             openMaintenanceModal(mx);
@@ -1263,6 +1296,15 @@ function openSectorModal(sector = null) {
   document.getElementById("sectorFlightNum").value = fnDigits;
   document.getElementById("sectorWarningBox").classList.add("hidden");
   document.getElementById("sectorWarningBox").textContent = "";
+
+  // Service code (SVC) select
+  const svcSel = document.getElementById("sectorServiceCode");
+  if (svcSel) {
+    svcSel.innerHTML = (state.serviceCodes || []).map(sc =>
+      `<option value="${sc.code}">${sc.code} - ${sc.status}</option>`
+    ).join("") || `<option value="J">J - Regular</option>`;
+    svcSel.value = sector ? (sector.service_code || "J") : "J";
+  }
 
   // Repeat panel — only available when adding a new sector
   const repeatMode = document.getElementById("sectorRepeatMode");
@@ -1447,6 +1489,7 @@ async function saveSector() {
   let   arr      = doc("sectorArr").value;
   const fnRaw   = doc("sectorFlightNum").value.trim();
   const fn       = fnRaw ? ("VU" + fnRaw.toUpperCase()) : null;
+  const serviceCode = doc("sectorServiceCode") ? (doc("sectorServiceCode").value || "J") : "J";
 
   if (!acId || !origin || !dest || !dep || !arr) {
     alert("Vui l\u00F2ng \u0111i\u1EC1n \u0111\u1EA7y \u0111\u1EE7 th\u00F4ng tin b\u1EAFt bu\u1ED9c."); return;
@@ -1472,7 +1515,8 @@ async function saveSector() {
       // ── Edit existing sector ────────────────────────────────────────
       if (!date) { alert("Vui lòng chọn ngày bay."); return; }
       const payload = { aircraft_id: acId, flight_date: date, origin, destination: dest,
-                        dep_utc: dep, arr_utc: arr, flight_number: fn, color: sectorColor };
+                        dep_utc: dep, arr_utc: arr, flight_number: fn, color: sectorColor,
+                        service_code: serviceCode };
       const prev = state.sectors.find(s => s.id === parseInt(id, 10))
                  || (state.allSectors && state.allSectors.find(s => s.id === parseInt(id, 10)));
       const updated = await API.updateSector(parseInt(id, 10), payload);
@@ -1508,7 +1552,8 @@ async function saveSector() {
           if (selectedDOWs.has(dow)) {
             const flightDate = dateToStr(cur);
             const payload = { aircraft_id: acId, flight_date: flightDate, origin, destination: dest,
-                              dep_utc: dep, arr_utc: arr, flight_number: fn, color: sectorColor };
+                              dep_utc: dep, arr_utc: arr, flight_number: fn, color: sectorColor,
+                              service_code: serviceCode };
             try {
               const created = await API.createSector(payload);
               createdIds.push(created.id);
@@ -1537,7 +1582,7 @@ async function saveSector() {
             while (cur2 <= end2) {
               if (selectedDOWs.has(cur2.getDay())) {
                 const fd = dateToStr(cur2);
-                try { await API.createSector({ aircraft_id: acId, flight_date: fd, origin, destination: dest, dep_utc: dep, arr_utc: arr, flight_number: fn, color: sectorColor }); } catch {}
+                try { await API.createSector({ aircraft_id: acId, flight_date: fd, origin, destination: dest, dep_utc: dep, arr_utc: arr, flight_number: fn, color: sectorColor, service_code: serviceCode }); } catch {}
               }
               cur2.setDate(cur2.getDate() + 1);
             }
@@ -1552,7 +1597,8 @@ async function saveSector() {
         // Single sector
         if (!date) { alert("Vui lòng chọn ngày bay."); return; }
         const payload = { aircraft_id: acId, flight_date: date, origin, destination: dest,
-                          dep_utc: dep, arr_utc: arr, flight_number: fn, color: sectorColor };
+                          dep_utc: dep, arr_utc: arr, flight_number: fn, color: sectorColor,
+                          service_code: serviceCode };
         const created = await API.createSector(payload);
         history.push({
           label: `Add sector ${origin}→${dest}`,
@@ -1892,7 +1938,7 @@ function openAircraftModal(ac = null) {
   // Show reset-sector-colors button only when editing (ac exists) and admin or mod
   const btnReset = doc("btnResetSectorColors");
   if (btnReset) {
-    const showReset = ac && (state.userRole === "admin" || state.userRole === "mod");
+    const showReset = ac && (isEditorRole());
     btnReset.classList.toggle("hidden", !showReset);
   }
 }
@@ -2176,9 +2222,13 @@ async function openRulesModal() {
     renderRegTable(),
     renderAirportTable(),
     renderRosterTable(),
+    renderServiceCodeTable(),
   ]);
   if (state.userRole === "admin") {
-    await Promise.all([renderUserTable(), renderSeasonTable(), renderDatabaseTable()]);
+    await Promise.all([renderUserTable(), renderDatabaseTable()]);
+  }
+  if (isEditorRole()) {
+    await renderSeasonTable();
   }
 }
 
@@ -2222,7 +2272,7 @@ async function renderTATTable() {
   state.tatRules = {};
   for (const r of rules) state.tatRules[r.station] = r;
 
-  const isAdmin = state.userRole === "admin";
+  const isAdmin = isEditorRole();
   const tbody = doc("tatTableBody");
   tbody.innerHTML = "";
 
@@ -2277,7 +2327,7 @@ async function renderBTTable() {
   state.blockTimeRules = {};
   for (const r of rules) state.blockTimeRules[`${r.origin}-${r.destination}`] = r;
 
-  const isAdmin = state.userRole === "admin";
+  const isAdmin = isEditorRole();
   const tbody = doc("btTableBody");
   tbody.innerHTML = "";
   for (const r of rules) {
@@ -2733,9 +2783,89 @@ async function clearDatabasePassword(id) {
   } catch (err) { alert("Lỗi: " + err.message); }
 }
 
+// ─── Service Code management ──────────────────────────────────────────────────
+function populateServiceCodeSelects() {
+  const codes = state.serviceCodes || [];
+  const opts = codes.map(sc => `<option value="${sc.code}">${sc.code} - ${sc.status}</option>`).join("")
+    || `<option value="J">J - Regular</option>`;
+
+  const svcSel = doc("sectorServiceCode");
+  if (svcSel) {
+    const prevVal = svcSel.value;
+    svcSel.innerHTML = opts;
+    if (prevVal) svcSel.value = prevVal;
+  }
+
+  // Timetable export filter: multi-select (no selection = "Tất cả")
+  const expSel = doc("expServiceCode");
+  if (expSel) {
+    const prevSelected = new Set([...expSel.selectedOptions].map(o => o.value));
+    expSel.innerHTML = opts;
+    for (const opt of expSel.options) {
+      if (prevSelected.has(opt.value)) opt.selected = true;
+    }
+  }
+}
+
+async function renderServiceCodeTable() {
+  try {
+    const codes = await fetch("/api/rules/service-codes").then(r => r.json());
+    state.serviceCodes = codes;
+    populateServiceCodeSelects();
+    const tbody = doc("svcCodeTableBody");
+    tbody.innerHTML = "";
+    for (const sc of codes) {
+      const statusEscaped = sc.status.replace(/'/g, "\\'");
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${sc.code}</td>
+        <td>${sc.status}</td>
+        <td class="action-cell admin-only">
+          <button class="btn btn-secondary btn-sm" onclick="editServiceCode(${sc.id},'${sc.code}','${statusEscaped}')">Sửa</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteServiceCode(${sc.id})">Xoá</button>
+        </td>`;
+      tbody.appendChild(tr);
+    }
+  } catch {}
+}
+
+function editServiceCode(id, code, status) {
+  doc("svcCodeId").value = id;
+  doc("svcCodeCode").value = code;
+  doc("svcCodeStatus").value = status;
+  doc("svcCodeFormTitle").textContent = "Chỉnh sửa Service Code";
+  doc("svcCodeFormModal").classList.remove("hidden");
+}
+
+async function deleteServiceCode(id) {
+  if (!confirm("Xoá service code này?")) return;
+  try {
+    const res = await fetch(`/api/rules/service-codes/${id}`, { method: "DELETE" });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || "Lỗi"); }
+    await renderServiceCodeTable();
+  } catch (err) { alert("Lỗi: " + err.message); }
+}
+
+async function saveServiceCode() {
+  const id = doc("svcCodeId").value;
+  const code = doc("svcCodeCode").value.toUpperCase().trim();
+  const status = doc("svcCodeStatus").value.trim();
+  if (!code || !status) { alert("Điền đầy đủ thông tin"); return; }
+  try {
+    const method = id ? "PUT" : "POST";
+    const url = id ? `/api/rules/service-codes/${id}` : "/api/rules/service-codes";
+    const res = await fetch(url, {
+      method, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code, status }),
+    });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || "Lỗi"); }
+    doc("svcCodeFormModal").classList.add("hidden");
+    await renderServiceCodeTable();
+  } catch (err) { alert("Lỗi: " + err.message); }
+}
+
 // ─── Airports tab (inside Rules modal) ───────────────────────────────────────
 async function renderAirportTable() {
-  const isAdmin = state.userRole === "admin";
+  const isAdmin = isEditorRole();
   const tbody = doc("airportTableBody");
   tbody.innerHTML = "";
   for (const ap of Object.values(state.airports)) {
@@ -2841,14 +2971,18 @@ async function openExportModal() {
   }
   doc("exportModalOverlay").classList.remove("hidden");
   doc("exportResult").innerHTML = "";
+  populateServiceCodeSelects();
 }
 
 async function runExport() {
+  const svcSel = doc("expServiceCode");
+  const selectedSvcCodes = svcSel ? [...svcSel.selectedOptions].map(o => o.value) : [];
   const params = {
     period_start: doc("expStart").value,
     period_end  : doc("expEnd").value,
     mode        : doc("expMode").value,
     timezone    : doc("expTZ").value,
+    service_codes: selectedSvcCodes.length > 0 ? selectedSvcCodes : null,
   };
   try {
     const data = await API.exportTimetable(params);
@@ -3291,7 +3425,7 @@ function _renderTTRows(container, data) {
     // ── Grouped display: route shown once, sub-rows for each flight ──
     const sorted = _sortTTRows([...displayRows], "route");
     const hdr = `<tr>
-      <th>Tàu</th><th>Chặng bay</th><th>Chuyến</th>
+      <th>Tàu</th><th>Chặng bay</th><th>Chuyến</th><th>SVC</th>
       <th>Cất (${data.timezone})</th><th>Hạ (${data.timezone})</th>
       <th>Block</th><th>Ngày bay</th><th>Day</th><th>Số CB</th><th>Ghế</th>${rHdr}</tr>`;
     let rowsHtml = "";
@@ -3305,6 +3439,7 @@ function _renderTTRows(container, data) {
         <td>${acDisplay}</td>
         <td style="font-weight:${showRoute ? "bold" : "normal"}">${showRoute ? route : ""}</td>
         <td>${r.flight_number || ""}</td>
+        <td>${r.service_code || "J"}</td>
         <td>${r.dep_display}</td><td>${r.arr_display}</td>
         <td>${minToHHMM(r.block_time_minutes)}</td>
         <td>${r.date_range || r.flight_date || ""}</td>
@@ -3348,7 +3483,7 @@ function _renderTTRows(container, data) {
       maybeRosterWarning();
     }
     const hdr = `<tr>
-      <th>Tàu</th><th>Chặng bay</th><th>Chuyến</th>
+      <th>Tàu</th><th>Chặng bay</th><th>Chuyến</th><th>SVC</th>
       <th>Cất (${data.timezone})</th><th>Hạ (${data.timezone})</th>
       <th>Block</th><th>Ngày bay</th><th>Day</th><th>Số CB</th><th>Ghế</th>${rHdr}</tr>`;
     const rowsHtml = displayRows.map((r, idx) => {
@@ -3357,6 +3492,7 @@ function _renderTTRows(container, data) {
       <td>${r.aircraft_reg}</td>
       <td>${r.route || r.origin + "-" + r.destination}</td>
       <td>${r.flight_number || ""}</td>
+      <td>${r.service_code || "J"}</td>
       <td>${r.dep_display}</td><td>${r.arr_display}</td>
       <td>${minToHHMM(r.block_time_minutes)}</td>
       <td>${r.date_range || r.flight_date || ""}</td><td>${r.day_of_week}</td>
@@ -3371,13 +3507,14 @@ function _renderTTRows(container, data) {
     }
   } else {
     const hdr = `<tr>
-      <th>Tàu</th><th>Chặng bay</th><th>Chuyến</th>
+      <th>Tàu</th><th>Chặng bay</th><th>Chuyến</th><th>SVC</th>
       <th>Cất (${data.timezone})</th><th>Hạ (${data.timezone})</th>
       <th>Block</th><th>Ngày bay</th><th>Day</th><th>Số CB</th><th>Ghế</th>${rHdr}</tr>`;
     const rowsHtml = displayRows.map((r, idx) => `<tr>
       <td>${r.aircraft ? r.aircraft.join(", ") : ""}</td>
       <td>${r.route || r.origin + "-" + r.destination}</td>
       <td>${r.flight_number || ""}</td>
+      <td>${r.service_code || "J"}</td>
       <td>${r.dep_display}</td><td>${r.arr_display}</td>
       <td>${minToHHMM(r.block_time_minutes)}</td>
       <td>${r.date_range}</td><td>${r.day_of_week}</td>
@@ -4014,7 +4151,7 @@ function createCalendarPicker(container, initialDate, onChange) {
 
 /** Ctrl+C: copy selected sectors or last clicked sector */
 function copySelectedSectors() {
-  if (state.userRole !== "admin") return;
+  if (!canCreateSectorRole()) return;
   const selectedIds = gantt.getSelectedSectorIds();
   let sectors;
   if (selectedIds.length > 0) {
@@ -4037,7 +4174,7 @@ function copySelectedSectors() {
 
 /** Copy all sectors of a given aircraft (for "Copy line") */
 function copyAircraftLine(acId, acName) {
-  if (state.userRole !== "admin") return;
+  if (!canCreateSectorRole()) return;
   const sectors = (state.allSectors || state.sectors).filter(s => s.aircraft_id === acId && s.status === "active");
   if (sectors.length === 0) {
     showToast(`${acName} không có chặng nào để copy`, "warn");
@@ -4055,7 +4192,7 @@ function copyAircraftLine(acId, acName) {
 /** Open paste modal (Ctrl+V) */
 let _pasteCalPicker = null;   // calendar picker instance for paste modal
 function openPasteModal() {
-  if (state.userRole !== "admin") return;
+  if (!canCreateSectorRole()) return;
   if (!state.clipboard) {
     showToast("Chưa có dữ liệu trong clipboard (dùng Ctrl+C trước)", "warn");
     return;
@@ -4695,7 +4832,7 @@ function bindUI() {
   const _btnClearRC = doc("btnClearAllRouteColors");
   if (_btnClearRC) {
     _btnClearRC.addEventListener("click", async () => {
-      if (state.userRole !== "admin") return;
+      if (!isEditorRole()) return;
       const ok = await showConfirm("Xóa toàn bộ quy tắc màu chặng bay?", "Xóa hết màu chặng");
       if (!ok) return;
       try {
@@ -4732,10 +4869,20 @@ function bindUI() {
     doc("sectorColor").dataset.hasColor = "1";
   });
   doc("btnResetSectorColor").addEventListener("click", () => {
-    // Reset to aircraft color or default
+    // Clear the per-sector color override so it inherits the aircraft's color
+    // (or, if the aircraft itself has no explicit color, the same auto
+    // route-based color the Gantt chart would compute — see gantt.js:routeColor).
     const acId = parseInt(doc("sectorAircraftId").value, 10);
     const ac = state.aircraft.find(a => a.id === acId);
-    doc("sectorColor").value = (ac && ac.color) ? ac.color : "#2563eb";
+    const origin = doc("sectorOrigin").value.trim().toUpperCase();
+    const dest   = doc("sectorDest").value.trim().toUpperCase();
+    let previewColor = "#2563eb";
+    if (ac && ac.color) {
+      previewColor = ac.color;
+    } else if (origin && dest && typeof routeColor === "function") {
+      previewColor = routeColor(origin, dest);
+    }
+    doc("sectorColor").value = previewColor;
     doc("sectorColor").dataset.hasColor = "0";
   });
   doc("sectorDep").addEventListener("change",    autoFillArr);
@@ -4897,6 +5044,16 @@ function bindUI() {
   });
   doc("btnSaveDatabase").addEventListener("click", saveDatabase);
   doc("btnSaveDatabasePassword").addEventListener("click", saveDatabasePassword);
+
+  // Service Code management
+  doc("btnAddServiceCode").addEventListener("click", () => {
+    doc("svcCodeId").value = "";
+    doc("svcCodeCode").value = "";
+    doc("svcCodeStatus").value = "";
+    doc("svcCodeFormTitle").textContent = "Thêm Service Code";
+    doc("svcCodeFormModal").classList.remove("hidden");
+  });
+  doc("btnSaveServiceCode").addEventListener("click", saveServiceCode);
 
   // Database switcher (all roles)
   const dbSwitcherEl = doc("dbSwitcher");
@@ -5119,7 +5276,7 @@ async function saveNote() {
 }
 
 async function deleteNoteById() {
-  if (state.userRole !== "admin") return;
+  if (!isEditorRole()) return;
   const id = doc("noteId").value;
   if (!id) return;
   const ok = await showConfirm("Bạn có chắc muốn xoá ghi chú này?");
@@ -5157,7 +5314,7 @@ async function renderRouteColorList() {
     return;
   }
 
-  const isAdmin = state.userRole === "admin";
+  const isAdmin = isEditorRole();
   list.innerHTML = `
     <table class="data-table" style="width:100%;">
       <thead><tr>
@@ -5221,7 +5378,7 @@ async function _reloadRouteColorState() {
 }
 
 async function addRouteColor() {
-  if (state.userRole !== "admin") return;
+  if (!isEditorRole()) return;
   const origin = doc("rcOrigin").value.trim().toUpperCase();
   const dest = doc("rcDest").value.trim().toUpperCase();
   const color = doc("rcColor").value;
@@ -5257,7 +5414,7 @@ async function addRouteColor() {
 }
 
 async function deleteRouteColor(id) {
-  if (state.userRole !== "admin") return;
+  if (!isEditorRole()) return;
   if (!confirm("Xoá màu chặng này?")) return;
   try {
     await API.deleteRouteColor(id);
@@ -5285,6 +5442,8 @@ window.editDatabase   = editDatabase;
 window.deleteDatabase = deleteDatabase;
 window.openDatabasePassword  = openDatabasePassword;
 window.clearDatabasePassword = clearDatabasePassword;
+window.editServiceCode   = editServiceCode;
+window.deleteServiceCode = deleteServiceCode;
 window.editSeason   = editSeason;
 window.deleteSeason = deleteSeason;
 window.openMaintenanceModal = openMaintenanceModal;
