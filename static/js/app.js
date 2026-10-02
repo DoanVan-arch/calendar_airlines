@@ -2691,7 +2691,7 @@ async function renderDatabaseTable() {
       tr.innerHTML = `
         <td>${d.name}</td>
         <td><code>${d.filename}</code></td>
-        <td>${d.is_default ? '<span class="tag-domestic">Mặc định</span>' : '<span class="tag-intl">Demo</span>'}</td>
+        <td>${d.is_default ? '<span class="tag-domestic">LIVE</span>' : '<span class="tag-intl">Demo</span>'}</td>
         <td>${passwordBadge}</td>
         <td class="action-cell">
           ${!d.is_default ? `
