@@ -37,6 +37,7 @@ def create_airport(request: Request, payload: AirportCreate, db: Session = Depen
         raise HTTPException(400, f"Airport '{payload.code}' already exists")
     ap = Airport(code=payload.code.upper(), name=payload.name,
                  timezone_offset=payload.timezone_offset,
+                 is_domestic=payload.is_domestic,
                  curfew_open=payload.curfew_open, curfew_close=payload.curfew_close)
     db.add(ap)
     db.commit()
@@ -445,7 +446,9 @@ def create_registration(request: Request, payload: RegistrationCreate, db: Sessi
     existing = db.query(Registration).filter(Registration.registration == reg).first()
     if existing:
         raise HTTPException(400, f"Registration '{reg}' already exists")
-    r = Registration(registration=reg, aircraft_model=payload.aircraft_model, seats=payload.seats, dw_type=payload.dw_type, mtow=payload.mtow)
+    r = Registration(registration=reg, aircraft_model=payload.aircraft_model,
+                      seats=payload.seats, dw_type=payload.dw_type, mtow=payload.mtow,
+                      default_svc=payload.default_svc or "J")
     db.add(r)
     db.commit()
     db.refresh(r)
@@ -483,9 +486,9 @@ def export_registration_excel(db: Session = Depends(get_db)):
     ws = wb.active
     ws.title = "Registrations"
 
-    ws.append(["Số đăng bạ", "Mẫu máy bay", "Số ghế", "D/W", "MTOW"])
+    ws.append(["Số đăng bạ", "Mẫu máy bay", "Số ghế", "D/W", "MTOW", "SVC"])
     for r in regs:
-        ws.append([r.registration, r.aircraft_model, r.seats, r.dw_type or "", r.mtow or ""])
+        ws.append([r.registration, r.aircraft_model, r.seats, r.dw_type or "", r.mtow or "", r.default_svc or "J"])
 
     for col in ws.columns:
         max_length = 0
@@ -511,9 +514,9 @@ def export_registration_csv(db: Session = Depends(get_db)):
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Số đăng bạ", "Mẫu máy bay", "Số ghế", "D/W", "MTOW"])
+    writer.writerow(["Số đăng bạ", "Mẫu máy bay", "Số ghế", "D/W", "MTOW", "SVC"])
     for r in regs:
-        writer.writerow([r.registration, r.aircraft_model, r.seats, r.dw_type or "", r.mtow or ""])
+        writer.writerow([r.registration, r.aircraft_model, r.seats, r.dw_type or "", r.mtow or "", r.default_svc or "J"])
 
     output.seek(0)
     return StreamingResponse(
@@ -536,6 +539,7 @@ async def import_registration_excel(request: Request, file: UploadFile = File(..
     idx_seats = cols.get("Số ghế")
     idx_dw = cols.get("D/W")
     idx_mtow = cols.get("MTOW")
+    idx_svc = cols.get("SVC")
     if idx_reg is None or idx_model is None or idx_seats is None:
         raise HTTPException(400, "File Excel không đúng định dạng: thiếu cột 'Số đăng bạ', 'Mẫu máy bay' hoặc 'Số ghế'.")
 
@@ -555,6 +559,8 @@ async def import_registration_excel(request: Request, file: UploadFile = File(..
             dw = str(dw_val).strip() if dw_val else None
             mtow_val_raw = _cell(row, idx_mtow)
             mtow_val = float(mtow_val_raw) if mtow_val_raw not in (None, "") else None
+            svc_val = _cell(row, idx_svc) if idx_svc is not None else None
+            svc = str(svc_val).strip() if svc_val else "J"
 
             existing = db.query(Registration).filter(Registration.registration == reg_code).first()
             if existing:
@@ -562,10 +568,11 @@ async def import_registration_excel(request: Request, file: UploadFile = File(..
                 existing.seats = seats
                 existing.dw_type = dw if dw else None
                 existing.mtow = mtow_val
+                existing.default_svc = svc
             else:
                 db.add(Registration(
                     registration=reg_code, aircraft_model=model, seats=seats,
-                    dw_type=dw if dw else None, mtow=mtow_val,
+                    dw_type=dw if dw else None, mtow=mtow_val, default_svc=svc,
                 ))
             imported += 1
         except Exception as e:

@@ -355,8 +355,13 @@
     for (const d of databases) {
       const opt = document.createElement('option');
       opt.value = d.id;
-     
-      opt.textContent = (d.is_default ? `${d.name} (LIVE)` : d.name) + (d.has_password ? ' 🔒' : '');
+      
+      let text = (d.is_default ? `${d.name} (LIVE)` : d.name) + (d.has_password ? ' 🔒' : '');
+      
+      // Thêm \ trước dấu ngoặc để Regex hiểu đó là ký tự text bình thường
+      // Thêm \s* để xóa luôn các khoảng trắng thừa xung quanh (nếu có)
+      opt.textContent = text.replace(/\s*\(\s*mặc định\s*\)\s*/gi, ' ').trim();
+      
       if (d.is_default) opt.selected = true;
       dbSelect.appendChild(opt);
     }

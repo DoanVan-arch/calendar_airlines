@@ -125,6 +125,44 @@ function downloadXLSX(data, filename = "schedule.xlsx") {
 
 // Ví dụ gọi:
 
+/**
+ * Group a line's sectors (per aircraft + flight day) into round-trip route
+ * pairs (A→B then B→A), labelling each pair "<suffix>-<n>" (e.g. "A289-1").
+ * Any leftover/odd sector that doesn't form a round-trip pair is labelled
+ * "0-<registration>" (e.g. "0-VN-A289"). Returns a Map keyed by sector id.
+ */
+function computeRoutePairLabels(rows) {
+  const groups = new Map(); // key: aircraftReg|flightDate -> array of rows
+  for (const r of rows) {
+    const key = `${r.aircraft_reg || ""}|${r.flight_date || ""}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  }
+  const labels = new Map();
+  for (const groupRows of groups.values()) {
+    const ordered = [...groupRows].sort((a, b) => (a.dep_utc || "").localeCompare(b.dep_utc || ""));
+    const reg = ordered[0] ? (ordered[0].aircraft_reg || "") : "";
+    const suffix = reg.includes("-") ? reg.split("-").pop() : reg;
+    let pairNum = 1;
+    let i = 0;
+    while (i < ordered.length) {
+      if (i + 1 < ordered.length) {
+        const s1 = ordered[i], s2 = ordered[i + 1];
+        if (s1.origin === s2.destination && s1.destination === s2.origin) {
+          labels.set(s1.id, `${suffix}-${pairNum}`);
+          labels.set(s2.id, `${suffix}-${pairNum}`);
+          pairNum++;
+          i += 2;
+          continue;
+        }
+      }
+      labels.set(ordered[i].id, `0-${reg}`);
+      i += 1;
+    }
+  }
+  return labels;
+}
+
 function downloadExcel(data, filename) {
   if (typeof XLSX === "undefined") { alert("Thư viện XLSX chưa tải xong."); return; }
 
@@ -146,7 +184,35 @@ function downloadExcel(data, filename) {
   let rows = [];
   const tz = data.timezone || "LCT";
 
-  if (displayMode === "grouped") {
+  if (displayMode === "slot") {
+    const sorted = _sortTTRows([...filteredRows], "default");
+    const acMap = _buildAcMap();
+    const stationSet = new Set();
+    for (const r of sorted) {
+      if (r.origin) stationSet.add(r.origin);
+      if (r.destination) stationSet.add(r.destination);
+    }
+    const hubs = ["SGN", "HAN"].filter(h => stationSet.has(h));
+    const rest = [...stationSet].filter(s => !hubs.includes(s)).sort();
+    const stations = [...hubs, ...rest];
+    const fmtSlot = (hhmm) => (hhmm || "").replace(":", "");
+
+    sorted.forEach((r, idx) => {
+      const row = {
+        "Note": "",
+        "No.": idx + 1,
+        "AC": acMap[r.aircraft_reg] || r.aircraft_reg || "",
+        "Flt No.": r.flight_number || "",
+        "Sector": `${r.origin || ""}${r.destination || ""}`,
+      };
+      for (const st of stations) {
+        if (st === r.origin) row[st] = fmtSlot(r.dep_display);
+        else if (st === r.destination) row[st] = fmtSlot(r.arr_display);
+        else row[st] = "";
+      }
+      rows.push(row);
+    });
+  } else if (displayMode === "grouped") {
     // Sort same as web grouped view
     const sorted = _sortTTRows([...filteredRows], "route");
     let lastRoute = "";
@@ -171,6 +237,7 @@ function downloadExcel(data, filename) {
     }
   } else if (data.mode === "daily") {
     const rosterRows = state._lastRosterRows;
+    const routePairLabels = computeRoutePairLabels(filteredRows);
     for (let i = 0; i < filteredRows.length; i++) {
       const r = filteredRows[i];
       const row = {
@@ -185,6 +252,7 @@ function downloadExcel(data, filename) {
         "Day":              r.day_of_week || "",
         "Số CB":            r.flight_count || 1,
         "Ghế":              r.total_seats || 0,
+        "Route Pair":       routePairLabels.get(r.id) || "",
       };
       if (rosterRows) {
         const rd = rosterRows[i];
@@ -228,7 +296,9 @@ function downloadExcel(data, filename) {
     return { wch: Math.min(maxLen + 2, 40) };
   });
   ws["!cols"] = colWidths;
-  const sheetName = displayMode === "grouped" ? "Timetable (Grouped)" : (data.mode === "daily" ? "Timetable (Daily)" : "Timetable");
+  const sheetName = displayMode === "slot" ? "Timetable (Slot)"
+    : displayMode === "grouped" ? "Timetable (Grouped)"
+    : (data.mode === "daily" ? "Timetable (Daily)" : "Timetable");
   XLSX.utils.book_append_sheet(wb, ws, sheetName);
   XLSX.writeFile(wb, filename);
 }
@@ -389,7 +459,12 @@ async function loadDatabaseSwitcher() {
     for (const d of dbs) {
       const opt = document.createElement("option");
       opt.value = d.id;
-      opt.textContent = d.is_default ? `${d.name} (LIVE)` : d.name;
+      let text = (d.is_default ? `${d.name} (LIVE)` : d.name) + (d.has_password ? ' 🔒' : '');
+      
+      // Thêm \ trước dấu ngoặc để Regex hiểu đó là ký tự text bình thường
+      // Thêm \s* để xóa luôn các khoảng trắng thừa xung quanh (nếu có)
+      opt.textContent = text.replace(/\s*\(\s*mặc định\s*\)\s*/gi, ' ').trim();
+    
       if (d.filename === state.currentDbFilename) opt.selected = true;
       sel.appendChild(opt);
     }
@@ -457,6 +532,8 @@ function applyRoleUI() {
   if (el1) el1.style.display = isEditor ? "" : "none";
   const el2 = doc("btnAddSector");
   if (el2) el2.style.display = canCreateSector ? "" : "none";
+  const el3 = doc("btnClearSchedule");
+  if (el3) el3.style.display = isEditor ? "" : "none";
 }
 
 async function loadReferenceData() {
@@ -1276,6 +1353,16 @@ function routeColorFromSector(s) {
 }
 
 // ─── Sector modal ─────────────────────────────────────────────────────────────
+
+/** Default SVC (service code) for a given aircraft, taken from its linked
+ * Registration's "SVC mặc định" (Rules → Registration). Falls back to "J". */
+function getDefaultSvcForAircraft(acId) {
+  const ac = state.aircraft.find(a => a.id === acId);
+  if (!ac || !ac.registration_id) return "J";
+  const reg = (state.registrations || []).find(r => r.id === ac.registration_id);
+  return (reg && reg.default_svc) || "J";
+}
+
 function openSectorModal(sector = null) {
   const modal  = document.getElementById("sectorModalOverlay");
   const title  = document.getElementById("sectorModalTitle");
@@ -1303,7 +1390,9 @@ function openSectorModal(sector = null) {
     svcSel.innerHTML = (state.serviceCodes || []).map(sc =>
       `<option value="${sc.code}">${sc.code} - ${sc.status}</option>`
     ).join("") || `<option value="J">J - Regular</option>`;
-    svcSel.value = sector ? (sector.service_code || "J") : "J";
+    svcSel.value = sector
+      ? (sector.service_code || "J")
+      : getDefaultSvcForAircraft(parseInt(acSel.value, 10));
   }
 
   // Repeat panel — only available when adding a new sector
@@ -2510,6 +2599,26 @@ async function importBTExcel(e) {
 }
 
 // ─── Registration management ──────────────────────────────────────────────────
+
+/** Populate the Registration form's "SVC mặc định" <select> from the Service
+ * Code rules (Rules → Service Code tab), selecting `selectedCode` if given. */
+function populateRegSvcSelect(selectedCode) {
+  const sel = doc("regSVC");
+  if (!sel) return;
+  const codes = state.serviceCodes || [];
+  sel.innerHTML = codes.map(sc =>
+    `<option value="${sc.code}">${sc.code} - ${sc.status}</option>`
+  ).join("") || `<option value="J">J - Regular</option>`;
+  sel.value = selectedCode || "J";
+}
+
+/** Human-readable label for a Registration's default_svc code, e.g. "J - Regular". */
+function _svcCodeLabel(code) {
+  if (!code) return "J - Regular";
+  const sc = (state.serviceCodes || []).find(s => s.code === code);
+  return sc ? `${sc.code} - ${sc.status}` : code;
+}
+
 async function renderRegTable() {
   const registrations = await API.getRegistrations();
   state.registrations = registrations;  // keep state in sync for aircraft modal dropdown
@@ -2518,6 +2627,8 @@ async function renderRegTable() {
   for (const reg of registrations) {
     const dwLabel = reg.dw_type || "-";
     const mtowLabel = reg.mtow != null ? reg.mtow : "-";
+    const svcCode = reg.default_svc || "J";
+    const svcLabel = _svcCodeLabel(svcCode);
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${reg.registration}</td>
@@ -2525,21 +2636,23 @@ async function renderRegTable() {
       <td>${reg.seats}</td>
       <td>${dwLabel}</td>
       <td>${mtowLabel}</td>
+      <td>${svcLabel}</td>
       <td class="action-cell admin-only">
-        <button class="btn btn-secondary btn-sm" onclick="editReg(${reg.id},'${reg.registration}','${reg.aircraft_model}',${reg.seats},'${reg.dw_type || ''}',${reg.mtow != null ? reg.mtow : 'null'})">Sửa</button>
+        <button class="btn btn-secondary btn-sm" onclick="editReg(${reg.id},'${reg.registration}','${reg.aircraft_model}',${reg.seats},'${reg.dw_type || ''}',${reg.mtow != null ? reg.mtow : 'null'},'${svcCode}')">Sửa</button>
         <button class="btn btn-danger btn-sm" onclick="deleteReg(${reg.id})">Xoá</button>
       </td>`;
     tbody.appendChild(tr);
   }
 }
 
-function editReg(id, registration, model, seats, dw, mtow) {
+function editReg(id, registration, model, seats, dw, mtow, svc) {
   doc("regId").value = id;
   doc("regNumber").value = registration;
   doc("regModel").value = model;
   doc("regSeats").value = seats;
   doc("regDW").value = dw || "";
   doc("regMTOW").value = mtow != null ? mtow : "";
+  populateRegSvcSelect(svc || "J");
   doc("regFormTitle").textContent = "Chỉnh sửa Registration";
   doc("regFormModal").classList.remove("hidden");
 }
@@ -2559,13 +2672,14 @@ async function saveReg() {
     const dw_type = doc("regDW").value || null;
     const mtowStr = doc("regMTOW").value.trim();
     const mtow = mtowStr ? parseFloat(mtowStr) : null;
+    const default_svc = doc("regSVC").value || "J";
     
     if (!registration || !aircraft_model || !seats) {
       alert("Điền đầy đủ thông tin");
       return;
     }
     
-    const data = { registration, aircraft_model, seats, dw_type, mtow };
+    const data = { registration, aircraft_model, seats, dw_type, mtow, default_svc };
     if (id) await API.updateRegistration(parseInt(id, 10), data);
     else await API.createRegistration(data);
     
@@ -2576,6 +2690,7 @@ async function saveReg() {
     doc("regSeats").value = "";
     doc("regDW").value = "";
     doc("regMTOW").value = "";
+    doc("regSVC").value = "Regular";
     await renderRegTable();
   } catch (err) {
     alert("Lỗi: " + err.message);
@@ -2796,6 +2911,13 @@ function populateServiceCodeSelects() {
     if (prevVal) svcSel.value = prevVal;
   }
 
+  const regSvcSel = doc("regSVC");
+  if (regSvcSel) {
+    const prevVal = regSvcSel.value;
+    regSvcSel.innerHTML = opts;
+    if (prevVal) regSvcSel.value = prevVal;
+  }
+
   // Timetable export filter: multi-select (no selection = "Tất cả")
   const expSel = doc("expServiceCode");
   if (expSel) {
@@ -2977,10 +3099,17 @@ async function openExportModal() {
 async function runExport() {
   const svcSel = doc("expServiceCode");
   const selectedSvcCodes = svcSel ? [...svcSel.selectedOptions].map(o => o.value) : [];
+  const displayMode = doc("expDisplay").value;
+
+  // "Theo Slot" only supports a single day — force period_end = period_start.
+  if (displayMode === "slot" && doc("expEnd").value !== doc("expStart").value) {
+    doc("expEnd").value = doc("expStart").value;
+  }
+
   const params = {
     period_start: doc("expStart").value,
-    period_end  : doc("expEnd").value,
-    mode        : doc("expMode").value,
+    period_end  : displayMode === "slot" ? doc("expStart").value : doc("expEnd").value,
+    mode        : displayMode === "slot" ? "daily" : doc("expMode").value,
     timezone    : doc("expTZ").value,
     service_codes: selectedSvcCodes.length > 0 ? selectedSvcCodes : null,
   };
@@ -2989,7 +3118,7 @@ async function runExport() {
     state.lastExportData = data;
     data.period_start = params.period_start;
     data.period_end   = params.period_end;
-    data.displayMode = doc("expDisplay").value;   // "flat" or "grouped"
+    data.displayMode = displayMode;   // "flat" | "grouped" | "slot"
     renderTimetableTable(data);
   } catch (e) {
     alert("Lỗi: " + e.message);
@@ -3242,6 +3371,12 @@ function _renderTTRows(container, data) {
 
   // AC label map: aircraft registration → "AC1", "AC2", ...
   const acMap = _buildAcMap();
+
+  // ── "Theo Slot" matrix view (single day only) ────────────────────────────
+  if (displayMode === "slot") {
+    _renderSlotTable(container, data.rows || [], acMap);
+    return;
+  }
 
   // ── Roster eligibility checks ────────────────────────────────────────────
   const activeSortBtn = document.querySelector("#ttSortBarContainer .tt-sort-btn.active");
@@ -3901,7 +4036,7 @@ function bindContextMenu() {
     } else {
       state.clipboard = {
         type      : "sectors",
-        sectors   : [{ ..._ctxSector }],
+        sectors   : _normalizeClipboardSectors([{ ..._ctxSector }]),
         sourceAcId: _ctxSector.aircraft_id,
         sourceDate: state.currentDate,
       };
@@ -3990,7 +4125,7 @@ function bindContextMenu() {
         for (const s of deletedCopy) {
           await API.createSector({ aircraft_id: s.aircraft_id, flight_date: s.flight_date,
             origin: s.origin, destination: s.destination, dep_utc: s.dep_utc, arr_utc: s.arr_utc,
-            flight_number: s.flight_number, status: s.status });
+            flight_number: s.flight_number, status: s.status, color: s.color || null, service_code: s.service_code || "J" });
         }
         await refreshGantt();
       },
@@ -4149,6 +4284,34 @@ function createCalendarPicker(container, initialDate, onChange) {
   };
 }
 
+/** Day difference (a - b) in whole days, both "YYYY-MM-DD" strings. */
+function _dateDiffDays(a, b) {
+  const da = new Date(a + "T00:00:00");
+  const db_ = new Date(b + "T00:00:00");
+  return Math.round((da - db_) / 86400000);
+}
+
+/**
+ * Normalize a group of sectors right when they're copied to the clipboard:
+ *  - Recomputes `_dayOffset` as the number of days after the EARLIEST
+ *    flight_date in the group (instead of whatever day-index the Gantt chart
+ *    happened to render them under, e.g. day 0/1/2 in a multi-day view —
+ *    using that raw render offset caused pasted sectors to land on the wrong
+ *    calendar day when pasting into a date range or specific dates).
+ *  - Ensures `service_code` always has an explicit value so it can never be
+ *    silently dropped/reset to the default "J" by a later `|| "J"` fallback
+ *    on an unexpected falsy value.
+ */
+function _normalizeClipboardSectors(sectors) {
+  if (!sectors || sectors.length === 0) return sectors || [];
+  const minDate = sectors.reduce((m, s) => (s.flight_date < m ? s.flight_date : m), sectors[0].flight_date);
+  return sectors.map(s => ({
+    ...s,
+    _dayOffset: _dateDiffDays(s.flight_date, minDate),
+    service_code: s.service_code || "J",
+  }));
+}
+
 /** Ctrl+C: copy selected sectors or last clicked sector */
 function copySelectedSectors() {
   if (!canCreateSectorRole()) return;
@@ -4165,11 +4328,155 @@ function copySelectedSectors() {
   if (sectors.length === 0) return;
   state.clipboard = {
     type      : "sectors",
-    sectors   : sectors.map(s => ({ ...s, _dayOffset: 0 })),
+    sectors   : _normalizeClipboardSectors(sectors),
     sourceAcId: sectors[0].aircraft_id,
     sourceDate: state.currentDate,
   };
   showToast(`Đã copy ${sectors.length} chặng bay`, "info");
+}
+
+/**
+ * "Paste nhanh" button inside the Paste modal: uses the first selected target
+ * aircraft in #pasteAircraftId as the anchor row and delegates to
+ * quickPasteRows() to paste every copied sector shifted by the same relative
+ * row offset (e.g. copy from rows 1,2,3 → quick-paste onto row 4 → lands on
+ * rows 4,5,6). Not available for the "lines" clipboard type, which already
+ * has its own explicit per-line aircraft mapping UI.
+ */
+async function quickPasteFromModal() {
+  if (!state.clipboard) {
+    showToast("Clipboard trống (dùng Ctrl+C để copy chặng trước)", "warn");
+    return;
+  }
+  if (state.clipboard.type === "lines") {
+    alert("Paste nhanh không áp dụng cho copy nhiều line (đã có ánh xạ tàu nguồn → đích riêng).");
+    return;
+  }
+  const selected = [...doc("pasteAircraftId").selectedOptions];
+  if (selected.length === 0) {
+    alert("Chọn tàu bay đích trước (hàng đầu tiên được chọn sẽ là hàng gốc để paste nhanh)."); return;
+  }
+  const targetAcId = parseInt(selected[0].value, 10);
+  const targetAc = state.aircraft.find(a => a.id === targetAcId);
+  if (!targetAc) return;
+  closeModal("pasteModalOverlay");
+  await quickPasteRows(targetAc);
+}
+
+/**
+ * "Paste nhanh" (quick paste by row offset): takes the sectors currently in
+ * the clipboard (copied via Ctrl+C, possibly spanning several different
+ * aircraft rows — e.g. rows 1, 2, 3) and pastes them starting at `targetAc`'s
+ * row, preserving each sector's *relative* row offset from the first copied
+ * row. E.g. if sectors were copied from rows 1, 2, 3 and the user quick-pastes
+ * onto row 4, the result lands on rows 4, 5, 6 respectively.
+ *
+ * Dates are anchored to the DATE CURRENTLY BEING VIEWED (state.currentDate)
+ * rather than the sector's original flight_date — otherwise the pasted
+ * sectors could land on a different (invisible) day than the one the user is
+ * looking at, making the feature appear to silently do nothing. Relative day
+ * spacing between copied sectors (via the normalized `_dayOffset`) is still
+ * preserved for multi-day line copies.
+ */
+async function quickPasteRows(targetAc) {
+  if (!canCreateSectorRole()) return;
+  if (!targetAc) return;
+  if (!state.clipboard || !state.clipboard.sectors || state.clipboard.sectors.length === 0) {
+    showToast("Clipboard trống (dùng Ctrl+C để copy chặng trước)", "warn");
+    return;
+  }
+  const sectors = state.clipboard.sectors;
+  const acOrder = state.aircraft.map(a => a.id);
+  const srcIndices = sectors
+    .map(s => acOrder.indexOf(s.aircraft_id))
+    .filter(idx => idx >= 0);
+  if (srcIndices.length === 0) {
+    showToast("Không xác định được hàng (tàu bay) nguồn của các chặng đã copy", "warn");
+    return;
+  }
+  const baseIdx = Math.min(...srcIndices);
+  const targetBaseIdx = acOrder.indexOf(targetAc.id);
+  if (targetBaseIdx < 0) return;
+  const rowOffset = targetBaseIdx - baseIdx;
+
+  const buildPayload = (s, acId) => ({
+    aircraft_id : acId,
+    flight_date : _addDaysStr(state.currentDate, s._dayOffset || 0),
+    origin      : s.origin,
+    destination : s.destination,
+    dep_utc     : s.dep_utc,
+    arr_utc     : s.arr_utc,
+    flight_number: s.flight_number || null,
+    color       : s.color || null,
+    service_code: s.service_code || "J",
+  });
+
+  const created = [];
+  const failed  = [];
+  for (const s of sectors) {
+    const srcIdx = acOrder.indexOf(s.aircraft_id);
+    if (srcIdx < 0) { failed.push(`${s.origin}→${s.destination}: không xác định tàu nguồn`); continue; }
+    const targetIdx = srcIdx + rowOffset;
+    if (targetIdx < 0 || targetIdx >= acOrder.length) {
+      failed.push(`${s.origin}→${s.destination}: vượt quá số hàng tàu bay hiện có`);
+      continue;
+    }
+    try {
+      const result = await API.createSector(buildPayload(s, acOrder[targetIdx]));
+      created.push(result);
+    } catch (e) {
+      failed.push(`${s.origin}→${s.destination}: ${e.message}`);
+    }
+  }
+
+  if (created.length > 0) {
+    const createdCopy = [...created];
+    history.push({
+      label: `Paste nhanh ${created.length} chặng vào ${targetAc.registration} (+${rowOffset} hàng)`,
+      undo: async () => {
+        for (const c of createdCopy) await API.deleteSector(c.id).catch(() => {});
+        await refreshGantt();
+      },
+      redo: async () => {
+        for (const s of sectors) {
+          const srcIdx = acOrder.indexOf(s.aircraft_id);
+          if (srcIdx < 0) continue;
+          const targetIdx = srcIdx + rowOffset;
+          if (targetIdx < 0 || targetIdx >= acOrder.length) continue;
+          await API.createSector(buildPayload(s, acOrder[targetIdx])).catch(() => {});
+        }
+        await refreshGantt();
+      },
+    });
+    await refreshGantt();
+    showToast(`Paste nhanh: đã tạo ${created.length} chặng bắt đầu từ ${targetAc.registration} (ngày ${state.currentDate})`, "success");
+  }
+  if (failed.length > 0) {
+    alert("Một số chặng không paste được:\n" + failed.join("\n"));
+  }
+}
+
+/**
+ * Like _normalizeClipboardSectors(), but groups by aircraft_id first so each
+ * copied LINE keeps its own internal day spacing relative to its own first
+ * day (rather than being skewed by a different aircraft's earliest date).
+ * Used for "Copy cả line" (single or multiple aircraft).
+ */
+function _normalizeClipboardSectorsGrouped(sectors) {
+  if (!sectors || sectors.length === 0) return sectors || [];
+  const groups = new Map();
+  for (const s of sectors) {
+    if (!groups.has(s.aircraft_id)) groups.set(s.aircraft_id, []);
+    groups.get(s.aircraft_id).push(s);
+  }
+  const result = [];
+  for (const groupSectors of groups.values()) {
+    const minDate = groupSectors.reduce((m, s) => (s.flight_date < m ? s.flight_date : m), groupSectors[0].flight_date);
+    for (const s of groupSectors) {
+      result.push({ ...s, _dayOffset: _dateDiffDays(s.flight_date, minDate), service_code: s.service_code || "J" });
+    }
+  }
+  return result;
 }
 
 /** Copy all sectors of a given aircraft (for "Copy line") */
@@ -4182,11 +4489,36 @@ function copyAircraftLine(acId, acName) {
   }
   state.clipboard = {
     type      : "line",
-    sectors   : sectors.map(s => ({ ...s })),
+    sectors   : _normalizeClipboardSectorsGrouped(sectors),
     sourceAcId: acId,
     sourceDate: state.currentDate,
   };
   showToast(`Đã copy ${sectors.length} chặng của ${acName}`, "info");
+}
+
+/** Copy the lines of MULTIPLE aircraft at once (for "copy nhiều tàu → nhiều tàu") */
+function copyMultipleAircraftLines(acIds) {
+  if (!canCreateSectorRole()) return;
+  if (!acIds || acIds.length === 0) return;
+  const pool = state.allSectors || state.sectors;
+  const sectors = pool.filter(s => acIds.includes(s.aircraft_id) && s.status === "active").map(s => ({ ...s }));
+  if (sectors.length === 0) {
+    showToast("Các tàu đã chọn không có chặng nào để copy", "warn");
+    return;
+  }
+  state.clipboard = {
+    type       : "lines",
+    sectors    : _normalizeClipboardSectorsGrouped(sectors),
+    sourceAcIds: [...acIds],
+    sourceAcId : acIds[0],
+    sourceDate : state.currentDate,
+  };
+  const names = acIds.map(id => {
+    const ac = state.aircraft.find(a => a.id === id);
+    return ac ? ac.registration : id;
+  }).join(", ");
+  showToast(`Đã copy ${sectors.length} chặng của ${acIds.length} tàu (${names})`, "info");
+  if (gantt.clearAircraftSelection) gantt.clearAircraftSelection();
 }
 
 /** Open paste modal (Ctrl+V) */
@@ -4250,10 +4582,36 @@ function openPasteModal() {
     `<option value="${ac.id}"${ac.id === sourceAcId ? " selected" : ""}>${ac.registration}${ac.ac_type ? " (" + ac.ac_type + ")" : ""}</option>`
   ).join("");
 
+  // "lines" clipboard (multi-aircraft copy) — show per-source-aircraft target mapping instead
+  const singleAcGroup = doc("pasteSingleAcGroup");
+  const mapGroup = doc("pasteLinesMapGroup");
+  if (type === "lines") {
+    singleAcGroup.classList.add("hidden");
+    mapGroup.classList.remove("hidden");
+    const sourceAcIds = state.clipboard.sourceAcIds || [sourceAcId];
+    const mapList = doc("pasteLinesMapList");
+    mapList.innerHTML = sourceAcIds.map((srcId, idx) => {
+      const srcAcObj = state.aircraft.find(a => a.id === srcId);
+      const srcLabel = srcAcObj ? srcAcObj.registration : srcId;
+      const options = state.aircraft.map(ac =>
+        `<option value="${ac.id}"${ac.id === srcId ? " selected" : ""}>${ac.registration}${ac.ac_type ? " (" + ac.ac_type + ")" : ""}</option>`
+      ).join("");
+      return `<div style="display:flex;align-items:center;gap:6px;">
+        <span style="min-width:90px;font-size:12px;">${srcLabel} →</span>
+        <select class="paste-line-target-sel" data-src-ac-id="${srcId}" style="flex:1;">${options}</select>
+      </div>`;
+    }).join("");
+  } else {
+    singleAcGroup.classList.remove("hidden");
+    mapGroup.classList.add("hidden");
+  }
+
   // Summary of what will be pasted
   const srcAc = state.aircraft.find(a => a.id === sourceAcId);
   const label = type === "line"
     ? `Cả line của ${srcAc ? srcAc.registration : sourceAcId} (${sectors.length} chặng)`
+    : type === "lines"
+    ? `${(state.clipboard.sourceAcIds || []).length} line tàu (${sectors.length} chặng)`
     : `${sectors.length} chặng bay`;
   doc("pasteSummary").textContent = `Sắp paste: ${label} — nguồn: ${sourceDate}`;
 
@@ -4261,13 +4619,14 @@ function openPasteModal() {
   const list = doc("pastePreviewList");
   list.innerHTML = sectors.map(s => {
     const dayTag = (s._dayOffset > 0) ? `<span class="paste-day-offset">+${s._dayOffset}d</span>` : "";
-    return `<div class="paste-preview-row"><span class="paste-sector-route">${s.origin}→${s.destination}</span>` +
+    const acTag = type === "lines" ? `<span class="paste-day-offset">${(state.aircraft.find(a=>a.id===s.aircraft_id)||{}).registration || s.aircraft_id}</span>` : "";
+    return `<div class="paste-preview-row">${acTag}<span class="paste-sector-route">${s.origin}→${s.destination}</span>` +
       `<span class="paste-sector-time">${s.dep_utc}–${s.arr_utc} UTC</span>${dayTag}</div>`;
   }).join("");
 
-  // Show "replace" option only when copying a full line
+  // Show "replace" option when copying a full line (single or multi)
   const replaceRow = doc("pasteReplaceRow");
-  if (type === "line") {
+  if (type === "line" || type === "lines") {
     replaceRow.classList.remove("hidden");
     doc("pasteReplace").checked = true;   // default: replace existing on target date
   } else {
@@ -4322,9 +4681,23 @@ function _addDaysStr(dateStr, n) {
 async function confirmPaste() {
   if (!state.clipboard) return;
   const { type, sectors } = state.clipboard;
-  const targetAcId  = parseInt(doc("pasteAircraftId").value, 10);
   const doReplace   = doc("pasteReplace").checked;
   const dateMode    = (document.querySelector('input[name="pasteDateMode"]:checked') || {}).value || "single";
+
+  // Build source-aircraft → target-aircraft mapping
+  let acMap = {};              // sourceAcId -> targetAcId (type === "lines" only)
+  let multiTargetAcIds = [];   // list of target aircraft ids (type !== "lines")
+  if (type === "lines") {
+    document.querySelectorAll(".paste-line-target-sel").forEach(sel => {
+      const srcId = parseInt(sel.dataset.srcAcId, 10);
+      acMap[srcId] = parseInt(sel.value, 10);
+    });
+    if (Object.values(acMap).some(v => !v)) { alert("Chọn đầy đủ tàu đích cho mỗi line"); return; }
+  } else {
+    multiTargetAcIds = [...doc("pasteAircraftId").selectedOptions].map(o => parseInt(o.value, 10));
+    if (multiTargetAcIds.length === 0) { alert("Chọn ít nhất một tàu bay đích"); return; }
+  }
+  const allTargetAcIds = type === "lines" ? [...new Set(Object.values(acMap))] : [...multiTargetAcIds];
 
   // Determine target date(s)
   let targetDates;
@@ -4344,93 +4717,115 @@ async function confirmPaste() {
     targetDates = [singleDate];
   }
 
-  if (!targetAcId) {
-    alert("Chọn tàu bay đích"); return;
-  }
-
-  // Compute the max day offset among copied sectors
-  const ignoreOffset = (dateMode === "single");
-  const maxOffset = ignoreOffset
-    ? 0
-    : sectors.reduce((mx, s) => Math.max(mx, s._dayOffset || 0), 0);
+  // The flight date must always follow exactly what the user picked in the
+  // Paste dialog (single date / each date in a range / each specific date),
+  // regardless of the sectors' original relative day spacing — otherwise
+  // sectors could land on a different day than the one explicitly selected,
+  // which is confusing. So the per-sector day offset is always ignored here.
+  const ignoreOffset = true;
+  const maxOffset = 0;
 
   const created  = [];
   const failed   = [];
   const deleted  = [];
 
-  for (const targetDate of targetDates) {
-    // If "replace" is checked (only available for type=line), delete existing active sectors
-    // on target date AND any offset dates (next-day sectors)
-    if (type === "line" && doReplace) {
-      const datesToClear = new Set();
-      for (let off = 0; off <= maxOffset; off++) {
-        datesToClear.add(_addDaysStr(targetDate, off));
+  // For "lines" (multi-aircraft copy), each sector already carries its own source
+  // aircraft_id, mapped via acMap. For "sectors"/"line" (single group of sectors),
+  // paste the SAME group into EVERY selected target aircraft.
+  const targetLoop = type === "lines" ? [null] : multiTargetAcIds;
+
+  for (const loopTargetAcId of targetLoop) {
+    const resolveTargetAcId = (s) => type === "lines" ? acMap[s.aircraft_id] : loopTargetAcId;
+
+    for (const targetDate of targetDates) {
+      // If "replace" is checked (only available for type=line/lines), delete existing active
+      // sectors on target date(s) AND any offset dates (next-day sectors), for this target ac
+      if ((type === "line" || type === "lines") && doReplace) {
+        const datesToClear = new Set();
+        for (let off = 0; off <= maxOffset; off++) {
+          datesToClear.add(_addDaysStr(targetDate, off));
+        }
+        const relevantAcIds = type === "lines" ? allTargetAcIds : [loopTargetAcId];
+        const existing = (state.allSectors || state.sectors).filter(
+          s => relevantAcIds.includes(s.aircraft_id) && datesToClear.has(s.flight_date) && s.status === "active"
+        );
+        for (const s of existing) {
+          try {
+            await API.deleteSector(s.id);
+            deleted.push(s);
+          } catch (e) {
+            console.warn("Could not delete sector", s.id, e);
+          }
+        }
       }
-      const existing = (state.allSectors || state.sectors).filter(
-        s => s.aircraft_id === targetAcId && datesToClear.has(s.flight_date) && s.status === "active"
-      );
-      for (const s of existing) {
+
+      for (const s of sectors) {
+        const dayOffset  = ignoreOffset ? 0 : (s._dayOffset || 0);
+        const sectorDate = _addDaysStr(targetDate, dayOffset);
+        const tgtAcId = resolveTargetAcId(s);
+        const payload = {
+          aircraft_id : tgtAcId,
+          flight_date : sectorDate,
+          origin      : s.origin,
+          destination : s.destination,
+          dep_utc     : s.dep_utc,
+          arr_utc     : s.arr_utc,
+          flight_number: s.flight_number || null,
+          color       : s.color || null,
+          service_code: s.service_code || "J",
+        };
         try {
-          await API.deleteSector(s.id);
-          deleted.push(s);
+          const result = await API.createSector(payload);
+          created.push(result);
         } catch (e) {
-          console.warn("Could not delete sector", s.id, e);
+          failed.push(`${dayOffset}|| ${JSON.stringify(payload)}|| ${sectorDate} ${s.origin}→${s.destination}: ${e.message}`);
         }
       }
     }
 
-    for (const s of sectors) {
-      const dayOffset  = ignoreOffset ? 0 : (s._dayOffset || 0);
-      const sectorDate = _addDaysStr(targetDate, dayOffset);
-      const payload = {
-        aircraft_id : targetAcId,
-        flight_date : sectorDate,
-        origin      : s.origin,
-        destination : s.destination,
-        dep_utc     : s.dep_utc,
-        arr_utc     : s.arr_utc,
-        flight_number: s.flight_number || null,
-        color       : s.color || null,
-      };
-      try {
-        const result = await API.createSector(payload);
-        created.push(result);
-      } catch (e) {
-        failed.push(`${dayOffset}|| ${JSON.stringify(payload)}|| ${sectorDate} ${s.origin}→${s.destination}: ${e.message}`);
-      }
-    }
+    // Avoid double-processing the "lines" case (targetLoop has a single dummy entry)
+    if (type === "lines") break;
   }
 
   closeModal("pasteModalOverlay");
 
   if (created.length > 0) {
-    const targetAc = state.aircraft.find(a => a.id === targetAcId);
     const deletedCopy = [...deleted];
     const dateLabel = targetDates.length === 1 ? targetDates[0] : `${targetDates.length} ngày`;
+    const targetLabel = allTargetAcIds.length > 1
+      ? `${allTargetAcIds.length} tàu`
+      : (state.aircraft.find(a => a.id === allTargetAcIds[0]) || {}).registration || allTargetAcIds[0];
     history.push({
-      label: `Paste ${created.length} chặng vào ${targetAc ? targetAc.registration : targetAcId} (${dateLabel})`,
+      label: `Paste ${created.length} chặng vào ${targetLabel} (${dateLabel})`,
       undo: async () => {
         for (const c of created) await API.deleteSector(c.id).catch(() => {});
         for (const s of deletedCopy) await API.createSector({
           aircraft_id: s.aircraft_id, flight_date: s.flight_date,
           origin: s.origin, destination: s.destination,
           dep_utc: s.dep_utc, arr_utc: s.arr_utc,
-          flight_number: s.flight_number || null, color: s.color || null,
+          flight_number: s.flight_number || null, color: s.color || null, service_code: s.service_code || "J",
+
         }).catch(() => {});
         await refreshGantt();
       },
       redo: async () => {
         for (const s of deletedCopy) await API.deleteSector(s.id).catch(() => {});
-        for (const date of targetDates) {
-          for (const s of sectors) {
-            const dayOff = s._dayOffset || 0;
-            await API.createSector({
-              aircraft_id: targetAcId, flight_date: _addDaysStr(date, dayOff),
-              origin: s.origin, destination: s.destination,
-              dep_utc: s.dep_utc, arr_utc: s.arr_utc,
-              flight_number: s.flight_number || null, color: s.color || null,
-            }).catch(() => {});
+        const redoLoop = type === "lines" ? [null] : multiTargetAcIds;
+        for (const loopTargetAcId of redoLoop) {
+          const resolveTargetAcId = (s) => type === "lines" ? acMap[s.aircraft_id] : loopTargetAcId;
+          for (const date of targetDates) {
+            for (const s of sectors) {
+              const dayOff = ignoreOffset ? 0 : (s._dayOffset || 0);
+              await API.createSector({
+                aircraft_id: resolveTargetAcId(s), flight_date: _addDaysStr(date, dayOff),
+                origin: s.origin, destination: s.destination,
+                dep_utc: s.dep_utc, arr_utc: s.arr_utc,
+                flight_number: s.flight_number || null, color: s.color || null, service_code: s.service_code || "J",
+
+              }).catch(() => {});
+            }
           }
+          if (type === "lines") break;
         }
         await refreshGantt();
       },
@@ -4454,8 +4849,152 @@ async function confirmPaste() {
   }
 }
 
-// ─── Aircraft label context menu (right-click on ac-label) ───────────────────
-let _ctxAircraft = null;
+// ─── Clear schedule (xoá lịch theo giai đoạn / ngày cụ thể / line tàu) ───────
+let _clearCalPicker = null;
+let _clearPreviewSectors = null; // cached matching sectors from last preview
+
+function openClearModal() {
+  if (!isEditorRole()) return;
+
+  // Aircraft multi-select
+  const sel = doc("clearAircraftIds");
+  sel.innerHTML = state.aircraft.map(ac =>
+    `<option value="${ac.id}">${ac.registration}${ac.ac_type ? " (" + ac.ac_type + ")" : ""}</option>`
+  ).join("");
+
+  // Reset date mode to "range"
+  document.querySelectorAll('input[name="clearDateMode"]').forEach(r => { r.checked = (r.value === "range"); });
+  doc("clearRangeSection").classList.remove("hidden");
+  doc("clearCalendarSection").classList.add("hidden");
+  doc("clearDateFrom").value = state.currentDate;
+  doc("clearDateTo").value   = state.currentDate;
+
+  if (_clearCalPicker) { _clearCalPicker.destroy(); _clearCalPicker = null; }
+
+  doc("clearPreviewBox").classList.add("hidden");
+  doc("clearPreviewList").innerHTML = "";
+  _clearPreviewSectors = null;
+
+  doc("clearModalOverlay").classList.remove("hidden");
+}
+
+/** Returns the set of target dates based on the selected date mode in the Clear modal */
+function _clearSelectedDates() {
+  const mode = (document.querySelector('input[name="clearDateMode"]:checked') || {}).value || "range";
+  if (mode === "calendar") {
+    return _clearCalPicker ? _clearCalPicker.getSelectedDates() : [];
+  }
+  const from = doc("clearDateFrom").value;
+  const to   = doc("clearDateTo").value;
+  if (!from || !to || to < from) return [];
+  const dates = [];
+  const cur = new Date(from + "T00:00:00");
+  const end = new Date(to + "T00:00:00");
+  while (cur <= end) {
+    dates.push(dateToStr(cur));
+    cur.setDate(cur.getDate() + 1);
+  }
+  return dates;
+}
+
+/** Finds sectors matching the selected aircraft + dates, returns them (active only) */
+async function _clearFindMatchingSectors() {
+  const dates = _clearSelectedDates();
+  if (dates.length === 0) { alert("Chưa chọn ngày hợp lệ."); return null; }
+
+  const selAcIds = [...doc("clearAircraftIds").selectedOptions].map(o => parseInt(o.value, 10));
+  const dateSet = new Set(dates);
+  const minDate = dates.reduce((a, b) => a < b ? a : b);
+  const maxDate = dates.reduce((a, b) => a > b ? a : b);
+
+  const allSectors = await API.getSectorsPeriod(minDate, maxDate);
+  return allSectors.filter(s =>
+    s.status === "active" &&
+    dateSet.has(s.flight_date) &&
+    (selAcIds.length === 0 || selAcIds.includes(s.aircraft_id))
+  );
+}
+
+async function runClearPreview() {
+  try {
+    const matched = await _clearFindMatchingSectors();
+    if (matched === null) return;
+    _clearPreviewSectors = matched;
+    const box = doc("clearPreviewBox");
+    const summary = doc("clearPreviewSummary");
+    const list = doc("clearPreviewList");
+    box.classList.remove("hidden");
+    summary.textContent = `Tìm thấy ${matched.length} chặng bay khớp điều kiện.`;
+    list.innerHTML = matched.slice(0, 300).map(s => {
+      const ac = state.aircraft.find(a => a.id === s.aircraft_id);
+      return `<div class="paste-preview-row">` +
+        `<span class="paste-day-offset">${ac ? ac.registration : s.aircraft_id}</span>` +
+        `<span class="paste-sector-route">${s.origin}→${s.destination}</span>` +
+        `<span class="paste-sector-time">${s.flight_date} ${s.dep_utc}–${s.arr_utc} UTC</span></div>`;
+    }).join("") + (matched.length > 300 ? `<div class="hint-text">... và ${matched.length - 300} chặng khác</div>` : "");
+  } catch (e) {
+    alert("Lỗi xem trước: " + e.message);
+  }
+}
+
+async function confirmClearSchedule() {
+  if (!isEditorRole()) return;
+  let matched = _clearPreviewSectors;
+  if (!matched) {
+    matched = await _clearFindMatchingSectors();
+    if (matched === null) return;
+  }
+  if (matched.length === 0) {
+    alert("Không có chặng bay nào khớp điều kiện để xoá.");
+    return;
+  }
+  if (!confirm(`Bạn có chắc muốn xoá vĩnh viễn ${matched.length} chặng bay đã chọn? Hành động này có thể Undo (Ctrl+Z) ngay sau đó.`)) return;
+
+  const deletedCopy = matched.map(s => ({ ...s }));
+  const failedIds = [];
+  for (const s of matched) {
+    try {
+      await API.deleteSector(s.id);
+    } catch (e) {
+      failedIds.push(s.id);
+    }
+  }
+
+  closeModal("clearModalOverlay");
+
+  history.push({
+    label: `Xoá ${deletedCopy.length} chặng bay theo giai đoạn`,
+    undo: async () => {
+      for (const s of deletedCopy) {
+        await API.createSector({
+          aircraft_id: s.aircraft_id, flight_date: s.flight_date,
+          origin: s.origin, destination: s.destination,
+          dep_utc: s.dep_utc, arr_utc: s.arr_utc,
+          flight_number: s.flight_number || null, color: s.color || null, service_code: s.service_code || "J",
+
+        }).catch(() => {});
+      }
+      await refreshGantt();
+    },
+    redo: async () => {
+      for (const s of deletedCopy) {
+        const pool = state.allSectors || [];
+        const match = pool.find(x => x.aircraft_id === s.aircraft_id && x.flight_date === s.flight_date &&
+          x.origin === s.origin && x.destination === s.destination && x.dep_utc === s.dep_utc);
+        if (match) await API.deleteSector(match.id).catch(() => {});
+      }
+      await refreshGantt();
+    },
+  });
+
+  await refreshView();
+  const msg = failedIds.length > 0
+    ? `Đã xoá ${deletedCopy.length - failedIds.length}/${deletedCopy.length} chặng (một số thất bại).`
+    : `Đã xoá ${deletedCopy.length} chặng bay.`;
+  showToast(msg, failedIds.length > 0 ? "warn" : "success");
+}
+
+
 
 function bindAcContextMenu() {
   // Right-click handler is attached in gantt.js via dispatch event
@@ -4479,7 +5018,15 @@ function bindAcContextMenu() {
     if (_ctxAircraft) openAircraftModal(_ctxAircraft);
   });
   doc("acCmCopy").addEventListener("click", () => {
-    if (_ctxAircraft) copyAircraftLine(_ctxAircraft.id, _ctxAircraft.registration);
+    const selIds = gantt.getSelectedAircraftIds ? gantt.getSelectedAircraftIds() : [];
+    if (selIds.length > 1) {
+      copyMultipleAircraftLines(selIds);
+    } else if (_ctxAircraft) {
+      copyAircraftLine(_ctxAircraft.id, _ctxAircraft.registration);
+    }
+  });
+  doc("acCmQuickPaste").addEventListener("click", () => {
+    if (_ctxAircraft) quickPasteRows(_ctxAircraft);
   });
   doc("acCmDelete").addEventListener("click", async () => {
     if (!_ctxAircraft) return;
@@ -4760,7 +5307,7 @@ function bindUI() {
               for (const s of deletedCopy) {
                 await API.createSector({ aircraft_id: s.aircraft_id, flight_date: s.flight_date,
                   origin: s.origin, destination: s.destination, dep_utc: s.dep_utc, arr_utc: s.arr_utc,
-                  flight_number: s.flight_number, status: s.status });
+                  flight_number: s.flight_number, status: s.status, color: s.color || null, service_code: s.service_code || "J" });
               }
               await refreshGantt();
             },
@@ -4867,6 +5414,13 @@ function bindUI() {
   });
   doc("sectorColor").addEventListener("change", () => {
     doc("sectorColor").dataset.hasColor = "1";
+  });
+  doc("sectorAircraftId").addEventListener("change", () => {
+    // Only auto-update the SVC default when adding a NEW sector (not editing
+    // an existing one, whose service_code should stay whatever it already is).
+    if (doc("sectorId").value) return;
+    const svcSel = doc("sectorServiceCode");
+    if (svcSel) svcSel.value = getDefaultSvcForAircraft(parseInt(doc("sectorAircraftId").value, 10));
   });
   doc("btnResetSectorColor").addEventListener("click", () => {
     // Clear the per-sector color override so it inherits the aircraft's color
@@ -4991,6 +5545,7 @@ function bindUI() {
     doc("regSeats").value = "";
     doc("regDW").value = "";
     doc("regMTOW").value = "";
+    populateRegSvcSelect("J");
     doc("regFormTitle").textContent = "Thêm Registration";
     doc("regFormModal").classList.remove("hidden");
   });
@@ -5078,6 +5633,34 @@ function bindUI() {
 
   // Export modal
   doc("btnRunExport").addEventListener("click", runExport);
+  doc("expDisplay").addEventListener("change", () => {
+    const isSlot = doc("expDisplay").value === "slot";
+    const expEndEl = doc("expEnd");
+    const expModeEl = doc("expMode");
+    const hintEl = doc("expSlotHint");
+    if (isSlot) {
+      // "Theo Slot" only supports viewing a single day at a time.
+      expEndEl.value = doc("expStart").value;
+      expEndEl.disabled = true;
+      expModeEl.value = "daily";
+      expModeEl.disabled = true;
+      if (hintEl) hintEl.classList.remove("hidden");
+    } else {
+      expEndEl.disabled = false;
+      expModeEl.disabled = false;
+      if (hintEl) hintEl.classList.add("hidden");
+    }
+    if (state.lastExportData) {
+      state.lastExportData.displayMode = doc("expDisplay").value;
+      renderTimetableTable(state.lastExportData);
+    }
+  });
+  doc("expStart").addEventListener("change", () => {
+    // Keep "Đến ngày" locked to "Từ ngày" while in Slot mode.
+    if (doc("expDisplay").value === "slot") {
+      doc("expEnd").value = doc("expStart").value;
+    }
+  });
   doc("expDomIntl").addEventListener("change", () => {
     if (state.lastExportData) {
       state.lastExportData.displayMode = doc("expDisplay").value;
@@ -5166,6 +5749,26 @@ function bindUI() {
   // Paste modal confirm
   const _btnConfirmPaste = doc("btnConfirmPaste");
   if (_btnConfirmPaste) _btnConfirmPaste.addEventListener("click", confirmPaste);
+  const _btnQuickPaste = doc("btnQuickPaste");
+  if (_btnQuickPaste) _btnQuickPaste.addEventListener("click", quickPasteFromModal);
+
+  // Clear schedule modal
+  const _btnClearSchedule = doc("btnClearSchedule");
+  if (_btnClearSchedule) _btnClearSchedule.addEventListener("click", openClearModal);
+  const _btnClearPreview = doc("btnClearPreview");
+  if (_btnClearPreview) _btnClearPreview.addEventListener("click", runClearPreview);
+  const _btnConfirmClear = doc("btnConfirmClear");
+  if (_btnConfirmClear) _btnConfirmClear.addEventListener("click", confirmClearSchedule);
+  document.querySelectorAll('input[name="clearDateMode"]').forEach(radio => {
+    radio.addEventListener("change", () => {
+      const mode = document.querySelector('input[name="clearDateMode"]:checked').value;
+      doc("clearRangeSection").classList.toggle("hidden", mode !== "range");
+      doc("clearCalendarSection").classList.toggle("hidden", mode !== "calendar");
+      if (mode === "calendar" && !_clearCalPicker) {
+        _clearCalPicker = createCalendarPicker(doc("clearCalendarPicker"), state.currentDate, () => {});
+      }
+    });
+  });
 
   // Note modal
   const _btnSaveNote = doc("btnSaveNote");
@@ -5542,6 +6145,56 @@ function _buildAcMap() {
   const map = {};
   acs.forEach((a, i) => { map[a.registration] = `AC${i + 1}`; });
   return map;
+}
+
+/** "Theo Slot" matrix view — rows = flights (sorted by aircraft line_order →
+ * departure time, same as the default Timetable sort), columns = every
+ * station (airport) flown that day. Each row shows the departure time under
+ * its origin column and the arrival time under its destination column.
+ * Only makes sense for a single day (enforced by the caller/UI). */
+function _renderSlotTable(container, rows, acMap) {
+  const sorted = _sortTTRows([...rows], "default");
+
+  // Station columns: every airport used today. Pin common hubs (SGN, HAN)
+  // first if present, then the rest alphabetically — matches the usual
+  // VN domestic/regional timetable layout.
+  const stationSet = new Set();
+  for (const r of sorted) {
+    if (r.origin) stationSet.add(r.origin);
+    if (r.destination) stationSet.add(r.destination);
+  }
+  const hubOrder = ["SGN", "HAN"];
+  const hubs = hubOrder.filter(h => stationSet.has(h));
+  const rest = [...stationSet].filter(s => !hubs.includes(s)).sort();
+  const stations = [...hubs, ...rest];
+
+  const fmtSlot = (hhmm) => (hhmm || "").replace(":", "");
+
+  const hdr = `<tr>
+    <th>Note</th><th>No.</th><th>AC</th><th>Flt No.</th><th>Sector</th>
+    ${stations.map(s => `<th>${s}</th>`).join("")}
+  </tr>`;
+
+  const rowsHtml = sorted.map((r, idx) => {
+    const acLabel = acMap[r.aircraft_reg] || r.aircraft_reg || "";
+    const sector = `${r.origin || ""}${r.destination || ""}`;
+    const cells = stations.map(st => {
+      if (st === r.origin) return `<td>${fmtSlot(r.dep_display)}</td>`;
+      if (st === r.destination) return `<td>${fmtSlot(r.arr_display)}</td>`;
+      return `<td></td>`;
+    }).join("");
+    return `<tr>
+      <td></td>
+      <td>${idx + 1}</td>
+      <td>${acLabel}</td>
+      <td>${r.flight_number || ""}</td>
+      <td>${sector}</td>
+      ${cells}
+    </tr>`;
+  }).join("");
+
+  container.insertAdjacentHTML("beforeend",
+    `<table class="tt-table tt-slot-table"><thead>${hdr}</thead><tbody>${rowsHtml}</tbody></table>`);
 }
 
 /** Look up the applicable roster rule for a given FDP start time (HH:MM local) and sector count.

@@ -657,6 +657,11 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
   outline: 2px dashed var(--accent);
   outline-offset: -2px;
 }
+.ac-label.ac-selected {
+  background: rgba(37, 99, 235, 0.18);
+  outline: 2px solid var(--accent, #2563eb);
+  outline-offset: -2px;
+}
 
 /* Gantt row */
 .gantt-row {
@@ -704,6 +709,14 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
   user-select: none;
   min-width: 40px;
   z-index: 5;
+}
+
+.gantt-select-box {
+  position: absolute;
+  border: 1px dashed var(--accent, #2563eb);
+  background: rgba(37, 99, 235, 0.15);
+  z-index: 50;
+  pointer-events: none;
 }
 
 .sector-block:hover { filter: brightness(1.2); transform: translateY(-1px); }
@@ -1407,6 +1420,20 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); }
   vertical-align: middle;
 }
 .tt-table tr:hover td { background: var(--bg-surface2); }
+
+.tt-slot-table th,
+.tt-slot-table td {
+  text-align: center;
+  white-space: nowrap;
+}
+.tt-slot-table th:nth-child(1),
+.tt-slot-table td:nth-child(1) {
+  text-align: left;
+  min-width: 70px;
+}
+.tt-slot-table td:nth-child(5) {
+  font-weight: 600;
+}
 
 .roster-summary {
   display: flex;

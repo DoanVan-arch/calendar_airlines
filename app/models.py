@@ -33,6 +33,7 @@ class Registration(Base):
     seats = Column(Integer, nullable=False)  # 200
     dw_type = Column(String(10), nullable=True)  # "Dry", "Wet", or None
     mtow = Column(Float, nullable=True)  # Maximum Take-Off Weight (tonnes)
+    default_svc = Column(String(20), nullable=True, default="J")  # Default service class, e.g. "Regular"
 
 
 class FlightSector(Base):

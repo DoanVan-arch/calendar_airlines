@@ -454,6 +454,18 @@ def _migrate_db():
         except Exception:
             pass  # Column already exists
 
+        # Add default_svc column to registrations table (default service class)
+        try:
+            conn.execute(text("ALTER TABLE registrations ADD COLUMN default_svc VARCHAR(20) DEFAULT 'J'"))
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+        try:
+            conn.execute(text("UPDATE registrations SET default_svc = 'J' WHERE default_svc IS NULL OR default_svc = 'Regular'"))
+            conn.commit()
+        except Exception:
+            pass
+
 
 app = FastAPI(title="Airline Schedule Manager", lifespan=lifespan)
 

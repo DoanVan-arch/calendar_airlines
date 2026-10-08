@@ -146,7 +146,10 @@ def update_sector(request: Request, sector_id: int, payload: FlightSectorUpdate,
     if not sector:
         raise HTTPException(404, "Sector not found")
     # Apply updates to determine final values for overlap check
-    updates = payload.model_dump(exclude_none=True)
+    # Use exclude_unset (not exclude_none) so explicit `null` values sent by the
+    # client (e.g. color: null to reset to the aircraft's inherited color) are
+    # still applied, while fields the client simply omitted stay untouched.
+    updates = payload.model_dump(exclude_unset=True)
     ac_id = updates.get("aircraft_id", sector.aircraft_id)
     f_date = updates.get("flight_date", sector.flight_date)
     dep = updates.get("dep_utc", sector.dep_utc)

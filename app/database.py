@@ -83,6 +83,11 @@ def create_database_file(filename: str) -> None:
             conn.commit()
         except Exception:
             pass  # column already exists
+        try:
+            conn.execute(text("ALTER TABLE registrations ADD COLUMN default_svc VARCHAR(20) DEFAULT 'J'"))
+            conn.commit()
+        except Exception:
+            pass  # column already exists
 
     # Local import to avoid a circular import between database.py and models.py
     from .models import ServiceCode

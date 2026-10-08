@@ -120,6 +120,77 @@ class GanttChart {
     this._bindRowDragGlobal();
     this._bindDragCleanup();
     this._bindZoom();
+    this._bindBoxSelect();
+  }
+
+  // ── Ctrl + drag rubber-band box select (select multiple sector blocks) ─────
+  _bindBoxSelect() {
+    let boxState = null; // { startX, startY, boxEl }
+
+    this.$rows.addEventListener("mousedown", e => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.button !== 0) return;
+      // Ignore if the mousedown originated on a sector block (let normal
+      // ctrl+click toggle-select handle that case instead).
+      if (e.target.closest(".sector-block")) return;
+
+      e.preventDefault();
+      const rowsRect = this.$rows.getBoundingClientRect();
+      const startX = e.clientX - rowsRect.left + this.$scrollArea.scrollLeft;
+      const startY = e.clientY - rowsRect.top;
+
+      const boxEl = document.createElement("div");
+      boxEl.className = "gantt-select-box";
+      boxEl.style.left = startX + "px";
+      boxEl.style.top  = startY + "px";
+      boxEl.style.width  = "0px";
+      boxEl.style.height = "0px";
+      this.$rows.appendChild(boxEl);
+
+      boxState = { startX, startY, boxEl };
+
+      const onMove = me => {
+        if (!boxState) return;
+        const r = this.$rows.getBoundingClientRect();
+        const curX = me.clientX - r.left + this.$scrollArea.scrollLeft;
+        const curY = me.clientY - r.top;
+        const left = Math.min(boxState.startX, curX);
+        const top  = Math.min(boxState.startY, curY);
+        const w    = Math.abs(curX - boxState.startX);
+        const h    = Math.abs(curY - boxState.startY);
+        boxState.boxEl.style.left   = left + "px";
+        boxState.boxEl.style.top    = top + "px";
+        boxState.boxEl.style.width  = w + "px";
+        boxState.boxEl.style.height = h + "px";
+      };
+
+      const onUp = () => {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        if (!boxState) return;
+        const selRect = boxState.boxEl.getBoundingClientRect();
+        boxState.boxEl.remove();
+        // Only select if the user actually dragged a noticeable rectangle
+        // (avoids accidentally clearing/altering selection on a plain Ctrl+click
+        // on empty space).
+        if (selRect.width > 3 || selRect.height > 3) {
+          for (const [sectorId, el] of this._sectorEls) {
+            const r2 = el.getBoundingClientRect();
+            const intersects = !(r2.right < selRect.left || r2.left > selRect.right ||
+                                  r2.bottom < selRect.top || r2.top > selRect.bottom);
+            if (intersects && !this._selectedSectors.has(sectorId)) {
+              this._selectedSectors.add(sectorId);
+              el.classList.add("selected");
+            }
+          }
+          if (this.onSelectionChange) this.onSelectionChange(this._selectedSectors.size);
+        }
+        boxState = null;
+      };
+
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
   }
 
   // ── Zoom (Ctrl+wheel) ─────────────────────────────────────────────────────
@@ -404,6 +475,21 @@ class GanttChart {
     }
 
     lbl.addEventListener("dblclick", () => this._editAircraftLabel(ac));
+    if (this._selectedAircraft && this._selectedAircraft.has(ac.id)) lbl.classList.add("ac-selected");
+    lbl.addEventListener("click", e => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (!this._selectedAircraft) this._selectedAircraft = new Set();
+      if (this._selectedAircraft.has(ac.id)) {
+        this._selectedAircraft.delete(ac.id);
+        lbl.classList.remove("ac-selected");
+      } else {
+        this._selectedAircraft.add(ac.id);
+        lbl.classList.add("ac-selected");
+      }
+      if (this.onAircraftSelectionChange) this.onAircraftSelectionChange([...this._selectedAircraft]);
+    });
     lbl.addEventListener("contextmenu", e => {
       e.preventDefault();
       e.stopPropagation();
@@ -782,6 +868,7 @@ class GanttChart {
       `Dep UTC:${sector.dep_utc}  LCT(+${depOff}): ${depLCT}`,
       `Arr UTC:${sector.arr_utc}  LCT(+${arrOff}): ${arrLCT}`,
       `Block: ${btMin}′ (${btStr})`,
+      sector.service_code ? `SVC: ${sector.service_code}` : "",
       sector.status === "cancelled" ? "⊗ ĐÃ HUỶ" : "",
       sector.status !== "cancelled" ? "↔ Kéo để thay đổi giờ bay" : "",
       sector.status !== "cancelled" ? "⇧+Kéo sang dòng khác để chuyển cả line" : "",
@@ -1248,6 +1335,18 @@ class GanttChart {
   // ── Public: get currently selected sector IDs ───────────────────────────────
   getSelectedSectorIds() {
     return [...this._selectedSectors];
+  }
+
+  // ── Public: get/clear currently selected aircraft (Ctrl+Click on label) ────
+  getSelectedAircraftIds() {
+    return this._selectedAircraft ? [...this._selectedAircraft] : [];
+  }
+
+  clearAircraftSelection() {
+    if (!this._selectedAircraft) return;
+    this._selectedAircraft.clear();
+    this.$labelCol.querySelectorAll(".ac-label.ac-selected").forEach(el => el.classList.remove("ac-selected"));
+    if (this.onAircraftSelectionChange) this.onAircraftSelectionChange([]);
   }
 
   // ── Hide floating tooltips during any drag operation ───────────────────────

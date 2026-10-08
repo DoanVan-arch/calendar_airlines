@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PikA - Pickleball Airways</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=81" />
+  <link rel="stylesheet" href="/static/css/style.css?v=85" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
 </head>
 <body>
@@ -68,6 +68,7 @@
   <button class="btn btn-secondary" id="btnExport"><i class="fas fa-file-export"></i> Xuất TT</button>
   <button class="btn btn-secondary" id="btnImportFile"><i class="fas fa-file-import"></i> Import</button>
   <button class="btn btn-secondary" id="btnSaveFile"><i class="fas fa-save"></i> Lưu lịch</button>
+  <button class="btn btn-danger" id="btnClearSchedule" title="Xoá lịch bay theo giai đoạn / ngày / line tàu"><i class="fas fa-eraser"></i> Xoá lịch</button>
   <div class="separator"></div>
   <div class="season-badge" id="seasonBadge" title="Mùa bay hiện tại">
     <i class="fas fa-sun" id="seasonIcon"></i>
@@ -206,7 +207,7 @@
           <label>Nhập giờ theo</label>
           <div class="tz-toggle modal-tz-toggle">
             <button class="tz-btn active" id="sectorTZUtc">UTC</button>
-            <button class="tz-btn" id="sectorTZLct">LCT (+7)</button>
+            <button class="tz-btn" id="sectorTZLct">LCT</button>
           </div>
         </div>
       </div>
@@ -489,7 +490,7 @@
         </div>
          <div class="table-wrapper">
         <table class="data-table" id="regTable">
-          <thead><tr><th>Số đăng bạ</th><th>Mẫu máy bay</th><th>Số ghế</th><th>D/W</th><th>MTOW (Tấn)</th><th class="admin-only"></th></tr></thead>
+          <thead><tr><th>Số đăng bạ</th><th>Mẫu máy bay</th><th>Số ghế</th><th>D/W</th><th>MTOW (Tấn)</th><th>SVC</th><th class="admin-only"></th></tr></thead>
           <tbody id="regTableBody"></tbody>
         </table>
       </div>
@@ -662,7 +663,9 @@
           <select id="expDisplay">
             <option value="flat">Danh sách phẳng</option>
             <option value="grouped">Gộp theo đường bay</option>
+            <option value="slot">Theo Slot (ma trận sân bay)</option>
           </select>
+          <small id="expSlotHint" class="hidden" style="font-size:10px;color:var(--text-muted);">Chế độ Slot chỉ xem được 1 ngày.</small>
         </div>
         <div class="form-group">
           <label>Nội địa/Quốc tế</label>
@@ -929,6 +932,7 @@
   <ul>
     <li id="acCmSwap"><i class="fas fa-exchange-alt"></i> Hoán đổi tuyến...</li>
     <li id="acCmCopy"><i class="fas fa-copy"></i> Copy cả line</li>
+    <li id="acCmQuickPaste"><i class="fas fa-bolt"></i> Paste nhanh (theo hàng đã chọn)</li>
     <li id="acCmEdit"><i class="fas fa-edit"></i> Chỉnh sửa tàu bay</li>
     <li id="acCmDelete" class="danger"><i class="fas fa-trash"></i> Xoá tàu bay</li>
   </ul>
@@ -1110,6 +1114,11 @@
         <label>MTOW (Tấn)</label>
         <input type="number" id="regMTOW" step="0.1" min="0" placeholder="MTOW" />
       </div>
+      <div class="form-group">
+        <label>SVC mặc định</label>
+        <select id="regSVC"></select>
+        <small style="color:var(--text-muted);font-size:11px;">Lấy từ danh sách Service Code (tab "Service Code" trong Quy tắc)</small>
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" data-close="regFormModal">Huỷ</button>
@@ -1232,9 +1241,14 @@
     <div class="modal-body">
       <p class="hint-text" id="pasteSummary"></p>
       <div class="paste-preview" id="pastePreviewList"></div>
-      <div class="form-group" style="margin-top:12px;">
+      <div class="form-group" style="margin-top:12px;" id="pasteSingleAcGroup">
         <label>Tàu bay đích <span class="required">*</span></label>
-        <select id="pasteAircraftId"></select>
+        <select id="pasteAircraftId" multiple size="5" style="height:auto;width:100%;"></select>
+        <small style="font-size:10px;color:var(--text-muted);">Giữ Ctrl/Cmd để chọn nhiều tàu đích (paste vào tất cả)</small>
+      </div>
+      <div class="form-group hidden" id="pasteLinesMapGroup" style="margin-top:12px;">
+        <label>Ánh xạ tàu nguồn → tàu đích <span class="hint-text">(copy nhiều tàu → nhiều tàu)</span></label>
+        <div id="pasteLinesMapList" style="display:flex;flex-direction:column;gap:6px;"></div>
       </div>
       <div class="form-group hidden" id="pasteReplaceRow">
         <label class="checkbox-label">
@@ -1291,12 +1305,71 @@
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" data-close="pasteModalOverlay">Huỷ</button>
+      <button class="btn btn-warning" id="btnQuickPaste" title="Dán nhanh: lấy tàu bay đích đầu tiên đang chọn làm hàng gốc, các chặng copy từ nhiều hàng khác nhau sẽ dán vào các hàng kế tiếp tương ứng, vào NGÀY ĐANG XEM trên lịch.">
+        <i class="fas fa-bolt"></i> Paste nhanh (theo hàng)
+      </button>
       <button class="btn btn-primary" id="btnConfirmPaste">
         <i class="fas fa-paste"></i> Paste
       </button>
     </div>
   </div>
 </div>
+
+<!-- Clear Schedule Modal (xoá lịch bay theo giai đoạn/ngày/line tàu) -->
+<div class="modal-overlay hidden" id="clearModalOverlay">
+  <div class="modal modal-sm" id="clearModal">
+    <div class="modal-header">
+      <h2><i class="fas fa-eraser"></i> Xoá lịch bay</h2>
+      <button class="close-btn" data-close="clearModalOverlay"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>Tàu bay <span class="hint-text">(để trống = tất cả tàu)</span></label>
+        <select id="clearAircraftIds" multiple size="5" style="height:auto;width:100%;"></select>
+      </div>
+
+      <div class="form-group" style="margin-top:4px;">
+        <label style="font-size:12px;color:var(--text-muted);margin-bottom:4px;display:block;">Chế độ chọn ngày</label>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <label class="checkbox-label"><input type="radio" name="clearDateMode" value="range" checked /> Khoảng ngày (giai đoạn)</label>
+          <label class="checkbox-label"><input type="radio" name="clearDateMode" value="calendar" /> Chọn ngày cụ thể</label>
+        </div>
+      </div>
+
+      <div id="clearRangeSection">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Từ ngày <span class="required">*</span></label>
+            <input type="date" id="clearDateFrom" />
+          </div>
+          <div class="form-group">
+            <label>Đến ngày <span class="required">*</span></label>
+            <input type="date" id="clearDateTo" />
+          </div>
+        </div>
+      </div>
+
+      <div id="clearCalendarSection" class="hidden" style="margin-top:6px;">
+        <div id="clearCalendarPicker" class="cal-picker"></div>
+      </div>
+
+      <div class="form-group" style="margin-top:8px;">
+        <button class="btn btn-secondary btn-sm" id="btnClearPreview"><i class="fas fa-search"></i> Xem trước</button>
+      </div>
+      <div id="clearPreviewBox" class="hidden" style="margin-top:8px;">
+        <p class="hint-text" id="clearPreviewSummary"></p>
+        <div class="paste-preview" id="clearPreviewList" style="max-height:200px;overflow-y:auto;"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="clearModalOverlay">Huỷ</button>
+      <button class="btn btn-danger" id="btnConfirmClear">
+        <i class="fas fa-trash"></i> Xoá
+      </button>
+    </div>
+  </div>
+</div>
+
 
 <!-- Note editor modal -->
 <div class="modal-overlay hidden" id="noteModalOverlay">
@@ -1399,10 +1472,10 @@
 </div>
 
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-<script src="/static/js/api.js?v=81"></script>
-<script src="/static/js/history.js?v=81"></script>
-<script src="/static/js/gantt.js?v=81"></script>
-<script src="/static/js/app.js?v=81"></script>
+<script src="/static/js/api.js?v=85"></script>
+<script src="/static/js/history.js?v=85"></script>
+<script src="/static/js/gantt.js?v=85"></script>
+<script src="/static/js/app.js?v=85"></script>
 <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
 
 <!-- ── Format Picker Modal (Import / Export) ─────────────────────────── -->

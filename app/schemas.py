@@ -209,6 +209,7 @@ class RegistrationBase(BaseModel):
     seats: int
     dw_type: Optional[str] = None  # "Dry", "Wet", or None
     mtow: Optional[float] = None   # Maximum Take-Off Weight (tonnes)
+    default_svc: Optional[str] = "J"  # Default service code, e.g. "J" (matches ServiceCode.code)
 
 
 class RegistrationCreate(RegistrationBase):
@@ -221,6 +222,7 @@ class RegistrationUpdate(BaseModel):
     seats: Optional[int] = None
     dw_type: Optional[str] = None  # "Dry", "Wet", or None
     mtow: Optional[float] = None   # Maximum Take-Off Weight (tonnes)
+    default_svc: Optional[str] = None  # Default service class, e.g. "Regular"
 
 
 class RegistrationOut(RegistrationBase):

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Body, UploadFile, File, Request
+from fastapi import APIRouter, Depends, HTTPException, Body, UploadFile, File, Request, Form
 from fastapi.responses import JSONResponse
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -511,7 +511,7 @@ def export_schedule(db: Session = Depends(get_db)):
                  for r in db.query(TATRule).all()]
     registrations = [{"id": r.id, "registration": r.registration,
                       "aircraft_model": r.aircraft_model, "seats": r.seats,
-                      "dw_type": r.dw_type, "mtow": r.mtow}
+                      "dw_type": r.dw_type, "mtow": r.mtow, "default_svc": r.default_svc}
                      for r in db.query(Registration).all()]
     seasons = [{"name": s.name, "season_type": s.season_type, "year": s.year,
                 "start_date": s.start_date, "end_date": s.end_date}
@@ -607,6 +607,7 @@ def import_schedule(request: Request, payload: dict = Body(...), db: Session = D
                 seats=reg_data.get("seats", 0),
                 dw_type=reg_data.get("dw_type"),
                 mtow=reg_data.get("mtow"),
+                default_svc=reg_data.get("default_svc") or "Regular",
             )
             db.add(new_reg)
             db.flush()
@@ -805,6 +806,47 @@ def _write_sheet(wb: openpyxl.Workbook, title: str, headers: list[str], rows: li
         ws.append([row.get(h) for h in headers])
 
 
+def _route_pair_suffix(registration: str) -> str:
+    """Derive the short suffix used in route-pair labels, e.g. 'VN-A289' -> 'A289'."""
+    if not registration:
+        return ""
+    if "-" in registration:
+        return registration.rsplit("-", 1)[-1]
+    return registration
+
+
+def compute_route_pairs(sectors: list, aircraft_reg_by_id: dict) -> dict:
+    """Group a line's sectors (per aircraft + flight day) into round-trip route
+    pairs (A->B then B->A), labelling each pair "<suffix>-<n>" (e.g. "A289-1").
+    Any leftover/odd sector that doesn't form a round-trip pair is labelled
+    "0-<registration>" (e.g. "0-VN-A289"). Returns {sector_id: label}.
+    """
+    groups: dict = defaultdict(list)
+    for s in sectors:
+        groups[(s.aircraft_id, s.flight_date)].append(s)
+
+    labels: dict = {}
+    for (ac_id, _flight_date), group_sectors in groups.items():
+        ordered = sorted(group_sectors, key=lambda s: s.dep_utc)
+        reg = aircraft_reg_by_id.get(ac_id, "")
+        suffix = _route_pair_suffix(reg)
+        pair_num = 1
+        i = 0
+        n = len(ordered)
+        while i < n:
+            if i + 1 < n:
+                s1, s2 = ordered[i], ordered[i + 1]
+                if s1.origin == s2.destination and s1.destination == s2.origin:
+                    labels[s1.id] = f"{pair_num}-{reg}"
+                    labels[s2.id] = f"{pair_num}-{reg}"
+                    pair_num += 1
+                    i += 2
+                    continue
+            labels[ordered[i].id] = f"0-{reg}"
+            i += 1
+    return labels
+
+
 def _read_sheet(wb: openpyxl.Workbook, title: str) -> list[dict]:
     if title not in wb.sheetnames:
         return []
@@ -899,10 +941,10 @@ def export_schedule(db: Session = Depends(get_db)):
     # Registrations
     registrations = db.query(Registration).all()
     _write_sheet(wb, "registrations",
-                 ["id", "registration", "aircraft_model", "seats", "dw_type", "mtow"],
+                 ["id", "registration", "aircraft_model", "seats", "dw_type", "mtow", "default_svc"],
                  [{"id": r.id, "registration": r.registration,
                    "aircraft_model": r.aircraft_model, "seats": r.seats,
-                   "dw_type": r.dw_type, "mtow": r.mtow}
+                   "dw_type": r.dw_type, "mtow": r.mtow, "default_svc": r.default_svc or "Regular"}
                   for r in registrations])
 
     # Aircraft
@@ -918,10 +960,11 @@ def export_schedule(db: Session = Depends(get_db)):
     sectors = db.query(FlightSector).all()
     aircraft_reg_by_id = {a.id: a.registration for a in aircraft}
     aircraft_type_by_id = {a.id: (a.ac_type or "") for a in aircraft}
+    route_pair_by_sector_id = compute_route_pairs(sectors, aircraft_reg_by_id)
     _write_sheet(wb, "sectors",
                  ["id", "aircraft_id", "registration", "aircraft_type", "flight_date", "origin",
                   "destination", "dep_utc", "arr_utc", "flight_number", "status", "sequence",
-                  "color", "service_code"],
+                  "color", "service_code", "route_pair"],
                  [{"id": s.id, "aircraft_id": s.aircraft_id,
                    "registration": aircraft_reg_by_id.get(s.aircraft_id, ""),
                    "aircraft_type": aircraft_type_by_id.get(s.aircraft_id, ""),
@@ -930,8 +973,10 @@ def export_schedule(db: Session = Depends(get_db)):
                    "dep_utc": s.dep_utc, "arr_utc": s.arr_utc,
                    "flight_number": s.flight_number, "status": s.status,
                    "sequence": s.sequence, "color": s.color,
-                   "service_code": s.service_code or "J"}
+                   "service_code": s.service_code or "J",
+                   "route_pair": route_pair_by_sector_id.get(s.id, "")}
                   for s in sectors])
+
 
     # Block-time rules
     bt_rules = db.query(BlockTimeRule).all()
@@ -1026,7 +1071,7 @@ def export_schedule(db: Session = Depends(get_db)):
 async def import_schedule(
     request: Request,
     file: UploadFile = File(...),
-    replace_all: bool = False,
+    replace_all: bool = Form(False),
     db: Session = Depends(get_db),
 ):
     require_editor(request)
@@ -1091,6 +1136,7 @@ async def import_schedule(
                 seats=int(reg["seats"]) if reg.get("seats") is not None else 0,
                 dw_type=reg.get("dw_type"),
                 mtow=reg.get("mtow"),
+                default_svc=reg.get("default_svc") or "Regular",
             )
             db.add(new_reg)
             db.flush()
@@ -1105,6 +1151,8 @@ async def import_schedule(
                 existing.dw_type = reg["dw_type"]
             if reg.get("mtow") is not None:
                 existing.mtow = reg["mtow"]
+            if reg.get("default_svc") is not None:
+                existing.default_svc = reg["default_svc"]
             if old_id is not None:
                 old_to_new_reg[int(old_id)] = existing.id
     db.commit()
