@@ -413,6 +413,8 @@ async function init() {
       info.classList.add("hidden");
     }
   };
+  doc("btnCancelSelected").addEventListener("click", () => cancelSelectedSectors());
+  doc("btnClearSelected").addEventListener("click", () => gantt._clearSelection());
 
   history.onchange = (canUndo, canRedo) => {
     document.getElementById("btnUndo").disabled = !canUndo;
@@ -4022,6 +4024,48 @@ function bindTabs() {
 }
 
 // ─── Context-menu actions ─────────────────────────────────────────────────────
+/** Cancel a list of sectors (bulk-aware), pushing a single undo/redo history entry. */
+async function cancelSectorsList(toCancel) {
+  if (!toCancel || toCancel.length === 0) return;
+  const ids = toCancel.map(s => s.id);
+  const label = toCancel.length > 1
+    ? `Huỷ ${toCancel.length} chặng đã chọn`
+    : `Cancel sector ${toCancel[0].origin}→${toCancel[0].destination}`;
+  if (toCancel.length > 1) {
+    await API.bulkCancelSectors(ids);
+  } else {
+    await API.cancelSector(ids[0]);
+  }
+  history.push({
+    label,
+    undo: async () => {
+      if (ids.length > 1) await API.bulkRestoreSectors(ids);
+      else await API.restoreSector(ids[0]);
+      await refreshGantt();
+    },
+    redo: async () => {
+      if (ids.length > 1) await API.bulkCancelSectors(ids);
+      else await API.cancelSector(ids[0]);
+      await refreshGantt();
+    },
+  });
+  await refreshGantt();
+}
+
+/** Cancel whatever sectors are currently multi-selected in the Gantt (footer "Huỷ đã chọn" button). */
+async function cancelSelectedSectors() {
+  const selectedIds = gantt.getSelectedSectorIds();
+  if (selectedIds.length === 0) return;
+  const toCancel = state.sectors.filter(s => selectedIds.includes(s.id) && s.status !== "cancelled");
+  if (toCancel.length === 0) {
+    showToast("Các chặng đã chọn đều đã bị huỷ", "warn");
+    return;
+  }
+  if (!confirm(`Huỷ ${toCancel.length} chặng bay đã chọn?`)) return;
+  await cancelSectorsList(toCancel);
+  gantt._clearSelection();
+}
+
 function bindContextMenu() {
   doc("cmEdit").addEventListener("click", () => {
     if (_ctxSector) openSectorModal(_ctxSector);
@@ -4050,29 +4094,7 @@ function bindContextMenu() {
     const toCancel = (selectedIds.length > 1 && selectedIds.includes(_ctxSector.id))
       ? state.sectors.filter(s => selectedIds.includes(s.id))
       : [_ctxSector];
-    const ids = toCancel.map(s => s.id);
-    const label = toCancel.length > 1
-      ? `Huỷ ${toCancel.length} chặng đã chọn`
-      : `Cancel sector ${toCancel[0].origin}→${toCancel[0].destination}`;
-    if (toCancel.length > 1) {
-      await API.bulkCancelSectors(ids);
-    } else {
-      await API.cancelSector(ids[0]);
-    }
-    history.push({
-      label,
-      undo: async () => {
-        if (ids.length > 1) await API.bulkRestoreSectors(ids);
-        else await API.restoreSector(ids[0]);
-        await refreshGantt();
-      },
-      redo: async () => {
-        if (ids.length > 1) await API.bulkCancelSectors(ids);
-        else await API.cancelSector(ids[0]);
-        await refreshGantt();
-      },
-    });
-    await refreshGantt();
+    await cancelSectorsList(toCancel);
   });
 
   doc("cmRestore").addEventListener("click", async () => {
@@ -4336,12 +4358,33 @@ function copySelectedSectors() {
 }
 
 /**
+ * Keeps the "Paste nhanh" button's tooltip in sync with the currently selected
+ * date mode in the Paste modal. The button itself now honors whichever mode
+ * is selected (single date / range+weekday / specific dates) — see
+ * quickPasteFromModal().
+ */
+function _updateQuickPasteAvailability(mode) {
+  const btn = doc("btnQuickPaste");
+  if (!btn) return;
+  btn.disabled = false;
+  btn.classList.remove("hidden");
+  const base = "Dán nhanh: lấy tàu bay đích đầu tiên đang chọn làm hàng gốc, các chặng copy từ nhiều hàng khác nhau sẽ dán vào các hàng kế tiếp tương ứng.";
+  btn.title = mode === "range"
+    ? base + " Sẽ dán vào TẤT CẢ các ngày phù hợp với khoảng ngày + thứ đã chọn."
+    : mode === "calendar"
+    ? base + " Sẽ dán vào TẤT CẢ các ngày cụ thể đã chọn trên lịch."
+    : base + " Sẽ dán vào NGÀY ĐANG XEM trên lịch (chế độ Một ngày).";
+}
+
+/**
  * "Paste nhanh" button inside the Paste modal: uses the first selected target
  * aircraft in #pasteAircraftId as the anchor row and delegates to
  * quickPasteRows() to paste every copied sector shifted by the same relative
  * row offset (e.g. copy from rows 1,2,3 → quick-paste onto row 4 → lands on
- * rows 4,5,6). Not available for the "lines" clipboard type, which already
- * has its own explicit per-line aircraft mapping UI.
+ * rows 4,5,6). Honors whichever date mode is selected in the modal — single
+ * date, range+weekday, or specific dates — same as the regular "Paste" button.
+ * Not available for the "lines" clipboard type, which already has its own
+ * explicit per-line aircraft mapping UI.
  */
 async function quickPasteFromModal() {
   if (!state.clipboard) {
@@ -4359,8 +4402,26 @@ async function quickPasteFromModal() {
   const targetAcId = parseInt(selected[0].value, 10);
   const targetAc = state.aircraft.find(a => a.id === targetAcId);
   if (!targetAc) return;
+
+  // Determine target date(s) — same logic as the regular "Paste" button.
+  const dateMode = (document.querySelector('input[name="pasteDateMode"]:checked') || {}).value || "single";
+  let targetDates;
+  if (dateMode === "range") {
+    targetDates = _pasteMultiDates();
+    if (targetDates.length === 0) {
+      alert("Không có ngày nào phù hợp với điều kiện đã chọn."); return;
+    }
+  } else if (dateMode === "calendar") {
+    targetDates = _pasteCalPicker ? _pasteCalPicker.getSelectedDates() : [];
+    if (targetDates.length === 0) {
+      alert("Chưa chọn ngày nào trên lịch."); return;
+    }
+  } else {
+    targetDates = [state.currentDate];
+  }
+
   closeModal("pasteModalOverlay");
-  await quickPasteRows(targetAc);
+  await quickPasteRows(targetAc, targetDates);
 }
 
 /**
@@ -4371,20 +4432,21 @@ async function quickPasteFromModal() {
  * row. E.g. if sectors were copied from rows 1, 2, 3 and the user quick-pastes
  * onto row 4, the result lands on rows 4, 5, 6 respectively.
  *
- * Dates are anchored to the DATE CURRENTLY BEING VIEWED (state.currentDate)
- * rather than the sector's original flight_date — otherwise the pasted
- * sectors could land on a different (invisible) day than the one the user is
- * looking at, making the feature appear to silently do nothing. Relative day
- * spacing between copied sectors (via the normalized `_dayOffset`) is still
- * preserved for multi-day line copies.
+ * `targetDates` is the list of anchor dates to paste onto (defaults to the
+ * date currently being viewed, for call sites outside the Paste modal — e.g.
+ * the aircraft row's right-click "Paste nhanh" menu item). Each date in the
+ * list is used as its own anchor (day 0); relative day spacing between
+ * copied sectors (via the normalized `_dayOffset`) is preserved against
+ * EACH anchor date, same as the regular "Paste" button.
  */
-async function quickPasteRows(targetAc) {
+async function quickPasteRows(targetAc, targetDates) {
   if (!canCreateSectorRole()) return;
   if (!targetAc) return;
   if (!state.clipboard || !state.clipboard.sectors || state.clipboard.sectors.length === 0) {
     showToast("Clipboard trống (dùng Ctrl+C để copy chặng trước)", "warn");
     return;
   }
+  if (!targetDates || targetDates.length === 0) targetDates = [state.currentDate];
   const sectors = state.clipboard.sectors;
   const acOrder = state.aircraft.map(a => a.id);
   const srcIndices = sectors
@@ -4399,9 +4461,9 @@ async function quickPasteRows(targetAc) {
   if (targetBaseIdx < 0) return;
   const rowOffset = targetBaseIdx - baseIdx;
 
-  const buildPayload = (s, acId) => ({
+  const buildPayload = (s, acId, anchorDate) => ({
     aircraft_id : acId,
-    flight_date : _addDaysStr(state.currentDate, s._dayOffset || 0),
+    flight_date : _addDaysStr(anchorDate, s._dayOffset || 0),
     origin      : s.origin,
     destination : s.destination,
     dep_utc     : s.dep_utc,
@@ -4413,43 +4475,48 @@ async function quickPasteRows(targetAc) {
 
   const created = [];
   const failed  = [];
-  for (const s of sectors) {
-    const srcIdx = acOrder.indexOf(s.aircraft_id);
-    if (srcIdx < 0) { failed.push(`${s.origin}→${s.destination}: không xác định tàu nguồn`); continue; }
-    const targetIdx = srcIdx + rowOffset;
-    if (targetIdx < 0 || targetIdx >= acOrder.length) {
-      failed.push(`${s.origin}→${s.destination}: vượt quá số hàng tàu bay hiện có`);
-      continue;
-    }
-    try {
-      const result = await API.createSector(buildPayload(s, acOrder[targetIdx]));
-      created.push(result);
-    } catch (e) {
-      failed.push(`${s.origin}→${s.destination}: ${e.message}`);
+  for (const anchorDate of targetDates) {
+    for (const s of sectors) {
+      const srcIdx = acOrder.indexOf(s.aircraft_id);
+      if (srcIdx < 0) { failed.push(`${s.origin}→${s.destination}: không xác định tàu nguồn`); continue; }
+      const targetIdx = srcIdx + rowOffset;
+      if (targetIdx < 0 || targetIdx >= acOrder.length) {
+        failed.push(`${s.origin}→${s.destination}: vượt quá số hàng tàu bay hiện có`);
+        continue;
+      }
+      try {
+        const result = await API.createSector(buildPayload(s, acOrder[targetIdx], anchorDate));
+        created.push(result);
+      } catch (e) {
+        failed.push(`${s.origin}→${s.destination}: ${e.message}`);
+      }
     }
   }
 
   if (created.length > 0) {
     const createdCopy = [...created];
+    const dateLabel = targetDates.length === 1 ? targetDates[0] : `${targetDates.length} ngày`;
     history.push({
-      label: `Paste nhanh ${created.length} chặng vào ${targetAc.registration} (+${rowOffset} hàng)`,
+      label: `Paste nhanh ${created.length} chặng vào ${targetAc.registration} (+${rowOffset} hàng, ${dateLabel})`,
       undo: async () => {
         for (const c of createdCopy) await API.deleteSector(c.id).catch(() => {});
         await refreshGantt();
       },
       redo: async () => {
-        for (const s of sectors) {
-          const srcIdx = acOrder.indexOf(s.aircraft_id);
-          if (srcIdx < 0) continue;
-          const targetIdx = srcIdx + rowOffset;
-          if (targetIdx < 0 || targetIdx >= acOrder.length) continue;
-          await API.createSector(buildPayload(s, acOrder[targetIdx])).catch(() => {});
+        for (const anchorDate of targetDates) {
+          for (const s of sectors) {
+            const srcIdx = acOrder.indexOf(s.aircraft_id);
+            if (srcIdx < 0) continue;
+            const targetIdx = srcIdx + rowOffset;
+            if (targetIdx < 0 || targetIdx >= acOrder.length) continue;
+            await API.createSector(buildPayload(s, acOrder[targetIdx], anchorDate)).catch(() => {});
+          }
         }
         await refreshGantt();
       },
     });
     await refreshGantt();
-    showToast(`Paste nhanh: đã tạo ${created.length} chặng bắt đầu từ ${targetAc.registration} (ngày ${state.currentDate})`, "success");
+    showToast(`Paste nhanh: đã tạo ${created.length} chặng bắt đầu từ ${targetAc.registration} (${dateLabel})`, "success");
   }
   if (failed.length > 0) {
     alert("Một số chặng không paste được:\n" + failed.join("\n"));
@@ -4543,6 +4610,7 @@ function openPasteModal() {
   doc("pasteSingleDateSection").classList.remove("hidden");
   doc("pasteMultiSection").classList.add("hidden");
   doc("pasteCalendarSection").classList.add("hidden");
+  _updateQuickPasteAvailability("single");
 
   // Destroy previous calendar picker if any
   if (_pasteCalPicker) { _pasteCalPicker.destroy(); _pasteCalPicker = null; }
@@ -4559,6 +4627,7 @@ function openPasteModal() {
       if (mode === "calendar" && !_pasteCalPicker) {
         _pasteCalPicker = createCalendarPicker(doc("pasteCalendarPicker"), state.currentDate, () => {});
       }
+      _updateQuickPasteAvailability(mode);
       _updatePasteMultiPreview();
     });
   });
@@ -4717,13 +4786,13 @@ async function confirmPaste() {
     targetDates = [singleDate];
   }
 
-  // The flight date must always follow exactly what the user picked in the
-  // Paste dialog (single date / each date in a range / each specific date),
-  // regardless of the sectors' original relative day spacing — otherwise
-  // sectors could land on a different day than the one explicitly selected,
-  // which is confusing. So the per-sector day offset is always ignored here.
-  const ignoreOffset = true;
-  const maxOffset = 0;
+  // Each picked date acts as the ANCHOR (day 0) for the pasted line — sectors
+  // that originally span multiple days (via s._dayOffset, e.g. a redeye whose
+  // arrival is "+1d") must keep their relative spacing to the anchor date,
+  // otherwise a multi-day line copy would incorrectly collapse onto a single
+  // date when pasted via "Khoảng ngày + Thứ" / "Chọn ngày cụ thể".
+  const ignoreOffset = false;
+  const maxOffset = Math.max(0, ...sectors.map(s => s._dayOffset || 0));
 
   const created  = [];
   const failed   = [];
@@ -5026,7 +5095,7 @@ function bindAcContextMenu() {
     }
   });
   doc("acCmQuickPaste").addEventListener("click", () => {
-    if (_ctxAircraft) quickPasteRows(_ctxAircraft);
+    if (_ctxAircraft) quickPasteRows(_ctxAircraft, [state.currentDate]);
   });
   doc("acCmDelete").addEventListener("click", async () => {
     if (!_ctxAircraft) return;
