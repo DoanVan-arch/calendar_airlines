@@ -99,10 +99,13 @@ def fmt_display(sector: FlightSector, timezone: str, airports: dict) -> dict:
 
 
 def compress_dates(date_strings: List[str]) -> str:
-    """Convert a sorted list of YYYY-MM-DD strings to a compact date-range string."""
+    """Convert a list of YYYY-MM-DD strings to a compact date-range string.
+    Duplicate dates (e.g. same date appearing from multiple merged rows) are
+    de-duplicated first, otherwise the same date could appear more than once
+    in the output."""
     if not date_strings:
         return ""
-    dates = sorted(date_strings)
+    dates = sorted(set(date_strings))
     ranges = []
     start = dates[0]
     prev = dates[0]
@@ -126,6 +129,18 @@ def compress_dates(date_strings: List[str]) -> str:
         else:
             parts.append(f"{s_fmt}-{e_fmt}")
     return ", ".join(parts)
+
+
+def format_dates_list(date_strings: List[str]) -> str:
+    """Format a list of YYYY-MM-DD strings as individual dates (no range
+    compression, no "-" separators), e.g. "15JAN26, 16JAN26, 17JAN26".
+    De-duplicates first. Used for "daily" mode timetable exports so each
+    flight date is shown explicitly rather than collapsed into a date-range
+    string."""
+    if not date_strings:
+        return ""
+    dates = sorted(set(date_strings))
+    return ", ".join(datetime.strptime(d, "%Y-%m-%d").strftime("%d%b%y").upper() for d in dates)
 
 
 # ── Timetable export ───────────────────────────────────────────────────────────
@@ -162,6 +177,12 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
     # Build registration map for seats lookup
     reg_map = {reg.id: reg for reg in db.query(Registration).all()}
 
+    # Distance (km) lookup from block-time rules, keyed by "ORIGIN-DEST"
+    distance_map = {
+        f"{r.origin}-{r.destination}": r.distance_km
+        for r in db.query(BlockTimeRule).all()
+    }
+
     # When LCT, post-filter so only sectors whose LCT departure date is in range
     if params.timezone == "LCT":
         filtered = []
@@ -192,6 +213,8 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
         # Seats from linked registration
         reg = reg_map.get(ac.registration_id) if ac and ac.registration_id else None
         r["seats"] = reg.seats if reg else 0
+        # Distance (km), looked up from Block Time rules by route
+        r["distance_km"] = distance_map.get(r["route"])
 
     if params.mode == "daily":
         # Merge identical sectors: group by (aircraft_id, route, dep_utc, arr_utc, flight_number, service_code)
@@ -214,7 +237,10 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
             r = dict(grp["row"])  # clone template row
             dows_sorted = sorted(grp["dows"])
             r["day_of_week"] = "".join(str(d) for d in dows_sorted)
-            r["date_range"] = compress_dates(grp["dates"])
+            # "daily" mode must show each flight date explicitly (not compressed
+            # into a date-range string) — e.g. "15JAN26, 16JAN26, 20JAN26"
+            # instead of "15JAN26-16JAN26, 20JAN26".
+            r["date_range"] = format_dates_list(grp["dates"])
             r["flight_count"] = len(grp["dates"])
             r["total_seats"] = r["seats"] * r["flight_count"]
             merged_rows.append(r)
@@ -247,6 +273,7 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
             "dep_display": r["dep_display"],
             "arr_display": r["arr_display"],
             "block_time_minutes": r["block_time_minutes"],
+            "distance_km": r.get("distance_km"),
             "timezone": params.timezone,
             "service_code": r.get("service_code") or "J",
         })
@@ -265,6 +292,7 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
             "dep_utc": grp["dep_utc"],
             "arr_utc": grp["arr_utc"],
             "block_time_minutes": grp["block_time_minutes"],
+            "distance_km": grp.get("distance_km"),
             "date_range": compress_dates(grp["dates"]),
             "flight_count": len(grp["dates"]),
             "aircraft": sorted(grp["aircraft"]),

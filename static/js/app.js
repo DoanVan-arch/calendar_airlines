@@ -229,6 +229,7 @@ function downloadExcel(data, filename) {
         [`Cất (${tz})`]:   r.dep_display,
         [`Hạ (${tz})`]:    r.arr_display,
         "Block":            minToHHMM(r.block_time_minutes),
+        "Distance (km)":    r.distance_km || "",
         "Ngày bay":         r.date_range || r.flight_date || "",
         "Day":              r.day_of_week || "",
         "Số CB":            r.flight_count || 1,
@@ -248,6 +249,7 @@ function downloadExcel(data, filename) {
         [`Cất (${tz})`]:   r.dep_display,
         [`Hạ (${tz})`]:    r.arr_display,
         "Block":            minToHHMM(r.block_time_minutes),
+        "Distance (km)":    r.distance_km || "",
         "Ngày bay":         r.date_range || r.flight_date || "",
         "Day":              r.day_of_week || "",
         "Số CB":            r.flight_count || 1,
@@ -279,6 +281,7 @@ function downloadExcel(data, filename) {
         [`Cất (${tz})`]:   r.dep_display,
         [`Hạ (${tz})`]:    r.arr_display,
         "Block":            minToHHMM(r.block_time_minutes),
+        "Distance (km)":    r.distance_km || "",
         "Ngày bay":         r.date_range || r.flight_date || "",
         "Day":              r.day_of_week || "",
         "Số CB":            r.flight_count || 1,
@@ -3564,7 +3567,7 @@ function _renderTTRows(container, data) {
     const hdr = `<tr>
       <th>Tàu</th><th>Chặng bay</th><th>Chuyến</th><th>SVC</th>
       <th>Cất (${data.timezone})</th><th>Hạ (${data.timezone})</th>
-      <th>Block</th><th>Ngày bay</th><th>Day</th><th>Số CB</th><th>Ghế</th>${rHdr}</tr>`;
+      <th>Block</th><th>Distance</th><th>Ngày bay</th><th>Day</th><th>Số CB</th><th>Ghế</th>${rHdr}</tr>`;
     let rowsHtml = "";
     let lastRoute = "";
     sorted.forEach((r, idx) => {
@@ -3579,6 +3582,7 @@ function _renderTTRows(container, data) {
         <td>${r.service_code || "J"}</td>
         <td>${r.dep_display}</td><td>${r.arr_display}</td>
         <td>${minToHHMM(r.block_time_minutes)}</td>
+        <td>${r.distance_km || ""}</td>
         <td>${r.date_range || r.flight_date || ""}</td>
         <td>${r.day_of_week || ""}</td>
         <td>${r.flight_count || 1}</td>
@@ -3622,7 +3626,7 @@ function _renderTTRows(container, data) {
     const hdr = `<tr>
       <th>Tàu</th><th>Chặng bay</th><th>Chuyến</th><th>SVC</th>
       <th>Cất (${data.timezone})</th><th>Hạ (${data.timezone})</th>
-      <th>Block</th><th>Ngày bay</th><th>Day</th><th>Số CB</th><th>Ghế</th>${rHdr}</tr>`;
+      <th>Block</th><th>Distance</th><th>Ngày bay</th><th>Day</th><th>Số CB</th><th>Ghế</th>${rHdr}</tr>`;
     const rowsHtml = displayRows.map((r, idx) => {
       const isManual = state._crewSetOverrides && state._crewSetOverrides[_rowKey(r)] !== undefined;
       return `<tr data-row-idx="${idx}" data-row-key="${_rowKey(r)}"${isManual ? ' class="tt-row-manual"' : ""}>
@@ -3632,6 +3636,7 @@ function _renderTTRows(container, data) {
       <td>${r.service_code || "J"}</td>
       <td>${r.dep_display}</td><td>${r.arr_display}</td>
       <td>${minToHHMM(r.block_time_minutes)}</td>
+      <td>${r.distance_km || ""}</td>
       <td>${r.date_range || r.flight_date || ""}</td><td>${r.day_of_week}</td>
       <td>${r.flight_count || 1}</td>
       <td>${r.total_seats || 0}</td>${rosterCells(r, idx)}</tr>`;
@@ -3646,7 +3651,7 @@ function _renderTTRows(container, data) {
     const hdr = `<tr>
       <th>Tàu</th><th>Chặng bay</th><th>Chuyến</th><th>SVC</th>
       <th>Cất (${data.timezone})</th><th>Hạ (${data.timezone})</th>
-      <th>Block</th><th>Ngày bay</th><th>Day</th><th>Số CB</th><th>Ghế</th>${rHdr}</tr>`;
+      <th>Block</th><th>Distance</th><th>Ngày bay</th><th>Day</th><th>Số CB</th><th>Ghế</th>${rHdr}</tr>`;
     const rowsHtml = displayRows.map((r, idx) => `<tr>
       <td>${r.aircraft ? r.aircraft.join(", ") : ""}</td>
       <td>${r.route || r.origin + "-" + r.destination}</td>
@@ -3654,6 +3659,7 @@ function _renderTTRows(container, data) {
       <td>${r.service_code || "J"}</td>
       <td>${r.dep_display}</td><td>${r.arr_display}</td>
       <td>${minToHHMM(r.block_time_minutes)}</td>
+      <td>${r.distance_km || ""}</td>
       <td>${r.date_range}</td><td>${r.day_of_week}</td>
       <td>${r.flight_count}</td>
       <td>${r.total_seats || 0}</td>${rosterCells(r, idx)}</tr>`).join("");
