@@ -89,6 +89,26 @@ def create_database_file(filename: str) -> None:
         except Exception:
             pass  # column already exists
 
+        # Performance: index the columns used by almost every query (date/
+        # aircraft/status filters on flight_sectors, and date-range lookups on
+        # maintenance_blocks / calendar_notes / audit_log). Without these, every
+        # schedule/warnings query does a full table scan — fine at a few
+        # thousand rows, but scales badly as history accumulates.
+        # `CREATE INDEX IF NOT EXISTS` is safe to re-run on every startup.
+        for stmt in (
+            "CREATE INDEX IF NOT EXISTS ix_sectors_ac_date_status ON flight_sectors (aircraft_id, flight_date, status)",
+            "CREATE INDEX IF NOT EXISTS ix_sectors_flight_date ON flight_sectors (flight_date)",
+            "CREATE INDEX IF NOT EXISTS ix_maintenance_ac_dates ON maintenance_blocks (aircraft_id, start_date, end_date)",
+            "CREATE INDEX IF NOT EXISTS ix_calendar_notes_date ON calendar_notes (note_date)",
+            "CREATE INDEX IF NOT EXISTS ix_audit_log_timestamp ON audit_log (timestamp)",
+        ):
+            try:
+                conn.execute(text(stmt))
+                conn.commit()
+            except Exception:
+                pass  # index already exists or table not present yet
+
+
     # Local import to avoid a circular import between database.py and models.py
     from .models import ServiceCode
 

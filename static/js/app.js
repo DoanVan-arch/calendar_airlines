@@ -4924,6 +4924,74 @@ async function confirmPaste() {
   }
 }
 
+// ─── Import sectors from Excel template (date range + day-of-week pattern) ───
+function openImportPatternModal() {
+  doc("importPatternFrom").value = state.currentDate;
+  doc("importPatternTo").value   = state.currentDate;
+  doc("importPatternFileInput").value = "";
+  doc("importPatternModalOverlay").classList.remove("hidden");
+}
+
+function downloadImportPatternTemplate() {
+  const rows = [
+    ["Tail", "From", "To", "Dep UTC", "Arr UTC", "Flight No.", "Day"],
+    ["VN-A129", "SGN", "HAN", "22:45", "00:55", "VU_EDITED", "1357"],
+    ["VN-A129", "HAN", "SGN", "01:35", "03:45", "VU751", "1357"],
+    ["VN-A129", "SGN", "BKK", "04:50", "06:25", "VU131", "2"],
+    ["VN-A129", "BKK", "SGN", "07:25", "09:15", "VU130", "2"],
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws["!cols"] = rows[0].map((h, i) => {
+    const maxLen = Math.max(h.length, ...rows.slice(1).map(r => String(r[i] || "").length));
+    return { wch: Math.min(maxLen + 2, 30) };
+  });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Mau");
+  XLSX.writeFile(wb, "mau_import_chuyen_bay.xlsx");
+}
+
+async function confirmImportPattern() {
+  const startDate = doc("importPatternFrom").value;
+  const endDate   = doc("importPatternTo").value;
+  if (!startDate || !endDate) { alert("Chọn khoảng ngày trước"); return; }
+  if (endDate < startDate) { alert("Ngày kết thúc phải sau ngày bắt đầu"); return; }
+  const fileInput = doc("importPatternFileInput");
+  const file = fileInput.files[0];
+  if (!file) { alert("Chọn file Excel mẫu trước"); return; }
+
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("start_date", startDate);
+  formData.append("end_date", endDate);
+
+  try {
+    showToast("Đang import chuyến bay...", "info");
+    const res = await fetch("/api/sectors/import-pattern", {
+      method: "POST",
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Import thất bại");
+    }
+    const result = await res.json();
+    closeModal("importPatternModalOverlay");
+    history.clear();
+    await refreshView();
+    let msg = `Đã tạo ${result.created} chuyến bay` +
+      (result.skipped > 0 ? `, bỏ qua ${result.skipped} chuyến đã tồn tại` : "") + ".";
+    if (result.errors && result.errors.length > 0) {
+      msg += `\n\nCác dòng bị lỗi:\n` +
+        result.errors.slice(0, 20).map(e => `- Dòng ${e.row}: ${e.error}`).join("\n");
+      if (result.errors.length > 20) msg += `\n... và ${result.errors.length - 20} dòng khác`;
+    }
+    showToast(`Import mẫu: đã tạo ${result.created} chuyến bay`, "success");
+    alert(msg);
+  } catch (err) {
+    alert("Lỗi import: " + err.message);
+  }
+}
+
 // ─── Clear schedule (xoá lịch theo giai đoạn / ngày cụ thể / line tàu) ───────
 let _clearCalPicker = null;
 let _clearPreviewSectors = null; // cached matching sectors from last preview
@@ -5025,48 +5093,59 @@ async function confirmClearSchedule() {
   }
   if (!confirm(`Bạn có chắc muốn xoá vĩnh viễn ${matched.length} chặng bay đã chọn? Hành động này có thể Undo (Ctrl+Z) ngay sau đó.`)) return;
 
-  const deletedCopy = matched.map(s => ({ ...s }));
-  const failedIds = [];
-  for (const s of matched) {
-    try {
-      await API.deleteSector(s.id);
-    } catch (e) {
-      failedIds.push(s.id);
+  // Guard against double-click/double-submit: deleting many sectors one by
+  // one can take a moment, and firing the delete loop twice concurrently for
+  // the same sector ids causes a backend race (ObjectDeletedError) since the
+  // second request tries to delete a row the first one already removed.
+  const btn = doc("btnConfirmClear");
+  if (btn) btn.disabled = true;
+
+  try {
+    const deletedCopy = matched.map(s => ({ ...s }));
+    const failedIds = [];
+    for (const s of matched) {
+      try {
+        await API.deleteSector(s.id);
+      } catch (e) {
+        failedIds.push(s.id);
+      }
     }
+
+    closeModal("clearModalOverlay");
+
+    history.push({
+      label: `Xoá ${deletedCopy.length} chặng bay theo giai đoạn`,
+      undo: async () => {
+        for (const s of deletedCopy) {
+          await API.createSector({
+            aircraft_id: s.aircraft_id, flight_date: s.flight_date,
+            origin: s.origin, destination: s.destination,
+            dep_utc: s.dep_utc, arr_utc: s.arr_utc,
+            flight_number: s.flight_number || null, color: s.color || null, service_code: s.service_code || "J",
+
+          }).catch(() => {});
+        }
+        await refreshGantt();
+      },
+      redo: async () => {
+        for (const s of deletedCopy) {
+          const pool = state.allSectors || [];
+          const match = pool.find(x => x.aircraft_id === s.aircraft_id && x.flight_date === s.flight_date &&
+            x.origin === s.origin && x.destination === s.destination && x.dep_utc === s.dep_utc);
+          if (match) await API.deleteSector(match.id).catch(() => {});
+        }
+        await refreshGantt();
+      },
+    });
+
+    await refreshView();
+    const msg = failedIds.length > 0
+      ? `Đã xoá ${deletedCopy.length - failedIds.length}/${deletedCopy.length} chặng (một số thất bại).`
+      : `Đã xoá ${deletedCopy.length} chặng bay.`;
+    showToast(msg, failedIds.length > 0 ? "warn" : "success");
+  } finally {
+    if (btn) btn.disabled = false;
   }
-
-  closeModal("clearModalOverlay");
-
-  history.push({
-    label: `Xoá ${deletedCopy.length} chặng bay theo giai đoạn`,
-    undo: async () => {
-      for (const s of deletedCopy) {
-        await API.createSector({
-          aircraft_id: s.aircraft_id, flight_date: s.flight_date,
-          origin: s.origin, destination: s.destination,
-          dep_utc: s.dep_utc, arr_utc: s.arr_utc,
-          flight_number: s.flight_number || null, color: s.color || null, service_code: s.service_code || "J",
-
-        }).catch(() => {});
-      }
-      await refreshGantt();
-    },
-    redo: async () => {
-      for (const s of deletedCopy) {
-        const pool = state.allSectors || [];
-        const match = pool.find(x => x.aircraft_id === s.aircraft_id && x.flight_date === s.flight_date &&
-          x.origin === s.origin && x.destination === s.destination && x.dep_utc === s.dep_utc);
-        if (match) await API.deleteSector(match.id).catch(() => {});
-      }
-      await refreshGantt();
-    },
-  });
-
-  await refreshView();
-  const msg = failedIds.length > 0
-    ? `Đã xoá ${deletedCopy.length - failedIds.length}/${deletedCopy.length} chặng (một số thất bại).`
-    : `Đã xoá ${deletedCopy.length} chặng bay.`;
-  showToast(msg, failedIds.length > 0 ? "warn" : "success");
 }
 
 
@@ -5834,6 +5913,15 @@ function bindUI() {
   if (_btnClearPreview) _btnClearPreview.addEventListener("click", runClearPreview);
   const _btnConfirmClear = doc("btnConfirmClear");
   if (_btnConfirmClear) _btnConfirmClear.addEventListener("click", confirmClearSchedule);
+
+  // Import pattern modal (import chuyến bay từ Excel theo khoảng ngày + Day)
+  const _btnImportPattern = doc("btnImportPattern");
+  if (_btnImportPattern) _btnImportPattern.addEventListener("click", openImportPatternModal);
+  const _btnDownloadImportPatternTemplate = doc("btnDownloadImportPatternTemplate");
+  if (_btnDownloadImportPatternTemplate) _btnDownloadImportPatternTemplate.addEventListener("click", downloadImportPatternTemplate);
+  const _btnConfirmImportPattern = doc("btnConfirmImportPattern");
+  if (_btnConfirmImportPattern) _btnConfirmImportPattern.addEventListener("click", confirmImportPattern);
+
   document.querySelectorAll('input[name="clearDateMode"]').forEach(radio => {
     radio.addEventListener("change", () => {
       const mode = document.querySelector('input[name="clearDateMode"]:checked').value;

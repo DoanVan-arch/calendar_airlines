@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, UniqueConstraint, DateTime
+from sqlalchemy import Column, Integer, String, Float, Boolean, UniqueConstraint, DateTime, Index
 from datetime import datetime
 from .database import Base
 
@@ -38,6 +38,10 @@ class Registration(Base):
 
 class FlightSector(Base):
     __tablename__ = "flight_sectors"
+    __table_args__ = (
+        Index("ix_sectors_ac_date_status", "aircraft_id", "flight_date", "status"),
+        Index("ix_sectors_flight_date", "flight_date"),
+    )
     id = Column(Integer, primary_key=True, autoincrement=True)
     aircraft_id = Column(Integer, nullable=False)
     flight_date = Column(String(10), nullable=False)  # YYYY-MM-DD
@@ -104,6 +108,9 @@ class Season(Base):
 class MaintenanceBlock(Base):
     """A maintenance / ground block for an aircraft spanning multiple days."""
     __tablename__ = "maintenance_blocks"
+    __table_args__ = (
+        Index("ix_maintenance_ac_dates", "aircraft_id", "start_date", "end_date"),
+    )
     id = Column(Integer, primary_key=True, autoincrement=True)
     aircraft_id = Column(Integer, nullable=False)
     label = Column(String(100), nullable=False, default="Maintenance")
@@ -117,6 +124,9 @@ class MaintenanceBlock(Base):
 class AuditLog(Base):
     """Immutable log of changes made to flight sectors and aircraft."""
     __tablename__ = "audit_log"
+    __table_args__ = (
+        Index("ix_audit_log_timestamp", "timestamp"),
+    )
     id = Column(Integer, primary_key=True, autoincrement=True)
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
     username = Column(String(50), nullable=False)
@@ -129,6 +139,9 @@ class AuditLog(Base):
 class CalendarNote(Base):
     """A note attached to a calendar date or date range (shown in month/week view)."""
     __tablename__ = "calendar_notes"
+    __table_args__ = (
+        Index("ix_calendar_notes_date", "note_date"),
+    )
     id = Column(Integer, primary_key=True, autoincrement=True)
     note_date = Column(String(10), nullable=False)   # YYYY-MM-DD (start date)
     note_end_date = Column(String(10), nullable=True)  # YYYY-MM-DD (end date, NULL = single day)

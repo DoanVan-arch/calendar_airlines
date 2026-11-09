@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PikA - Pickleball Airways</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=85" />
+  <link rel="stylesheet" href="/static/css/style.css?v=87" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
 </head>
 <body>
@@ -61,6 +61,7 @@
   <button class="btn btn-primary" id="btnAddAircraft"><i class="fas fa-plus"></i> Thêm tàu</button>
   <button class="btn btn-success" id="btnAddSector"><i class="fas fa-plus-circle"></i> Thêm chặng</button>
   <button class="btn btn-success" id="btnAddChain"><i class="fas fa-link"></i> Thêm chuỗi</button>
+  <button class="btn btn-success" id="btnImportPattern" title="Thêm chuyến bay từ Excel theo khoảng ngày + mẫu lặp"><i class="fas fa-calendar-plus"></i> Import mẫu</button>
   <div class="separator"></div>
   <button class="btn btn-secondary" id="btnRules"><i class="fas fa-cog"></i> Quy tắc</button>
   <div class="separator"></div>
@@ -1377,6 +1378,53 @@
 </div>
 
 
+<!-- Import Pattern Modal (thêm chuyến bay từ Excel theo khoảng ngày + mẫu lặp) -->
+<div class="modal-overlay hidden" id="importPatternModalOverlay">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2><i class="fas fa-calendar-plus"></i> Import mẫu chuyến bay (theo khoảng ngày)</h2>
+      <button class="close-btn" data-close="importPatternModalOverlay"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Từ ngày <span class="required">*</span></label>
+          <input type="date" id="importPatternFrom" />
+        </div>
+        <div class="form-group">
+          <label>Đến ngày <span class="required">*</span></label>
+          <input type="date" id="importPatternTo" />
+        </div>
+      </div>
+
+      <div class="form-group" style="margin-top:8px;">
+        <label>File Excel mẫu <span class="required">*</span></label>
+        <input type="file" id="importPatternFileInput" accept=".xlsx,.xls" />
+      </div>
+
+      <div class="hint-text" style="margin-top:10px;line-height:1.6;">
+        File Excel gồm các cột (có dòng tiêu đề, thứ tự cột không bắt buộc):<br>
+        <strong>Tail</strong> (số đăng bạ) | <strong>From</strong> (điểm đi) | <strong>To</strong> (điểm đến) |
+        <strong>Dep UTC</strong> | <strong>Arr UTC</strong> | <strong>Flight No.</strong> |
+        <strong>Day</strong> (các chữ số 1-7, 1=Thứ 2...7=Chủ nhật, VD "1357" = Thứ 2/4/6/CN)<br><br>
+        Mỗi dòng sẽ được tạo thành chuyến bay vào tất cả các ngày trong khoảng đã chọn ở trên có thứ trùng với cột Day.
+        Chuyến đã tồn tại (cùng tàu/ngày/chặng/giờ đi) sẽ được bỏ qua, không tạo trùng.
+      </div>
+
+      <button class="btn btn-secondary btn-sm" id="btnDownloadImportPatternTemplate" style="margin-top:10px;">
+        <i class="fas fa-file-download"></i> Tải file mẫu
+      </button>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="importPatternModalOverlay">Huỷ</button>
+      <button class="btn btn-primary" id="btnConfirmImportPattern">
+        <i class="fas fa-upload"></i> Import
+      </button>
+    </div>
+  </div>
+</div>
+
+
 <!-- Note editor modal -->
 <div class="modal-overlay hidden" id="noteModalOverlay">
   <div class="modal modal-sm">
@@ -1478,11 +1526,10 @@
 </div>
 
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-<script src="/static/js/api.js?v=85"></script>
-<script src="/static/js/history.js?v=85"></script>
-<script src="/static/js/gantt.js?v=85"></script>
-<script src="/static/js/app.js?v=85"></script>
-<script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+<script src="/static/js/api.js?v=87"></script>
+<script src="/static/js/history.js?v=87"></script>
+<script src="/static/js/gantt.js?v=87"></script>
+<script src="/static/js/app.js?v=87"></script>
 
 <!-- ── Format Picker Modal (Import / Export) ─────────────────────────── -->
 <div class="modal-overlay hidden" id="formatPickerOverlay">

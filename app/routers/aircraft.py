@@ -13,6 +13,10 @@ router = APIRouter()
 @router.get("/", response_model=List[AircraftOut])
 def list_aircraft(db: Session = Depends(get_db)):
     aircraft_list = db.query(Aircraft).order_by(Aircraft.line_order, Aircraft.id).all()
+    # Bulk-load all registrations once instead of querying per aircraft (N+1 fix).
+    all_regs = db.query(Registration).all()
+    reg_by_id = {r.id: r for r in all_regs}
+    reg_by_name = {r.registration: r for r in all_regs}
     result = []
     for ac in aircraft_list:
         ac_dict = {
@@ -28,9 +32,9 @@ def list_aircraft(db: Session = Depends(get_db)):
         # If registration_id is set, look up by id; otherwise fall back to matching by registration string
         reg = None
         if ac.registration_id:
-            reg = db.query(Registration).filter(Registration.id == ac.registration_id).first()
+            reg = reg_by_id.get(ac.registration_id)
         if not reg:
-            reg = db.query(Registration).filter(Registration.registration == ac.registration).first()
+            reg = reg_by_name.get(ac.registration)
         if reg:
             ac_dict["registration_info"] = {
                 "aircraft_model": reg.aircraft_model,

@@ -1,12 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File, Form
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import ObjectDeletedError, StaleDataError
 from typing import List, Optional
 from datetime import datetime, timedelta
+import io
+import openpyxl
 
 from ..database import get_db
 from ..models import FlightSector, BlockTimeRule, TATRule, Aircraft, Airport, AuditLog
 from ..schemas import FlightSectorCreate, FlightSectorUpdate, FlightSectorOut, SwapAircraftPayload, BulkCancelPayload
 from .auth import get_session, require_mod_or_admin, require_editor
+from .export import _read_sheet_indexed, _norm_time
 
 router = APIRouter()
 
@@ -173,8 +177,16 @@ def delete_sector(request: Request, sector_id: int, db: Session = Depends(get_db
     if not sector:
         raise HTTPException(404, "Sector not found")
     _audit(db, request, "DELETE", sector)
-    db.delete(sector)
-    db.commit()
+    try:
+        db.delete(sector)
+        db.commit()
+    except (ObjectDeletedError, StaleDataError):
+        # The row was already deleted by a concurrent request (e.g. a
+        # double-click on "Xoá lịch" firing two delete calls for the same
+        # sector, or a slow request retried by the browser). Treat this as a
+        # no-op success instead of a 500 — the end result (row gone) is the
+        # same either way.
+        db.rollback()
 
 
 @router.post("/{sector_id}/cancel", response_model=FlightSectorOut)
@@ -207,18 +219,14 @@ def restore_sector(request: Request, sector_id: int, db: Session = Depends(get_d
 def bulk_cancel_sectors(request: Request, payload: BulkCancelPayload, db: Session = Depends(get_db)):
     """Cancel multiple sectors at once."""
     require_editor(request)
+    sectors = db.query(FlightSector).filter(FlightSector.id.in_(payload.sector_ids)).all()
     results = []
-    for sid in payload.sector_ids:
-        sector = db.query(FlightSector).filter(FlightSector.id == sid).first()
-        if not sector:
-            continue
+    for sector in sectors:
         sector.status = "cancelled"
-        results.append(sid)
+        results.append(sector.id)
     db.commit()
-    for sid in results:
-        sector = db.query(FlightSector).filter(FlightSector.id == sid).first()
-        if sector:
-            _audit(db, request, "CANCEL", sector)
+    for sector in sectors:
+        _audit(db, request, "CANCEL", sector)
     return {"ok": True, "cancelled": results}
 
 
@@ -226,18 +234,14 @@ def bulk_cancel_sectors(request: Request, payload: BulkCancelPayload, db: Sessio
 def bulk_restore_sectors(request: Request, payload: BulkCancelPayload, db: Session = Depends(get_db)):
     """Restore multiple cancelled sectors at once."""
     require_editor(request)
+    sectors = db.query(FlightSector).filter(FlightSector.id.in_(payload.sector_ids)).all()
     results = []
-    for sid in payload.sector_ids:
-        sector = db.query(FlightSector).filter(FlightSector.id == sid).first()
-        if not sector:
-            continue
+    for sector in sectors:
         sector.status = "active"
-        results.append(sid)
+        results.append(sector.id)
     db.commit()
-    for sid in results:
-        sector = db.query(FlightSector).filter(FlightSector.id == sid).first()
-        if sector:
-            _audit(db, request, "RESTORE", sector)
+    for sector in sectors:
+        _audit(db, request, "RESTORE", sector)
     return {"ok": True, "restored": results}
 
 
@@ -637,3 +641,173 @@ def get_warnings(
                 })
 
     return {"date": date, "warnings": warnings}
+
+
+# ── Import sectors from Excel template + date range / day-of-week pattern ──────
+#
+# Template columns (header row required, order flexible, Vietnamese/English
+# header names both accepted):
+#   Tail (registration) | From (origin) | To (destination) | Dep UTC | Arr UTC
+#   | Flight No. | Day (digits 1-7, Monday=1 ... Sunday=7, e.g. "1357" means
+#   the flight operates on Mon/Wed/Fri/Sun)
+#
+# For each row, a FlightSector is created on every date within
+# [start_date, end_date] whose ISO weekday (Monday=1...Sunday=7, matching the
+# convention already used for day_of_week in export.py) matches one of the
+# digits in the row's "Day" column. Existing identical sectors (same
+# aircraft/date/origin/destination/dep_utc) are skipped to avoid duplicates.
+
+_IMPORT_PATTERN_HEADER_ALIASES = {
+    "tail": "tail", "registration": "tail", "tau": "tail", "tàu": "tail", "số đăng bạ": "tail",
+    "from": "from", "origin": "from", "điểm đi": "from",
+    "to": "to", "destination": "to", "điểm đến": "to",
+    "dep utc": "dep_utc", "dep_utc": "dep_utc", "giờ đi utc": "dep_utc", "gio di utc": "dep_utc",
+    "arr utc": "arr_utc", "arr_utc": "arr_utc", "giờ đến utc": "arr_utc", "gio den utc": "arr_utc",
+    "flight no.": "flight_no", "flight no": "flight_no", "flight_number": "flight_no",
+    "số hiệu": "flight_no", "so hieu": "flight_no",
+    "day": "day", "ngày": "day", "ngay": "day", "day of week": "day", "thứ": "day",
+}
+
+
+def _map_import_pattern_row(raw_row: dict) -> dict:
+    """Normalize a raw Excel row dict (arbitrary header text) into the fixed
+    keys: tail, from, to, dep_utc, arr_utc, flight_no, day."""
+    mapped = {}
+    for header, value in raw_row.items():
+        key = _IMPORT_PATTERN_HEADER_ALIASES.get(str(header).strip().lower())
+        if key:
+            mapped[key] = value
+    return mapped
+
+
+@router.post("/import-pattern")
+async def import_sectors_pattern(
+    request: Request,
+    file: UploadFile = File(...),
+    start_date: str = Form(...),
+    end_date: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """Import flight sectors from an Excel template, expanded across every
+    date in [start_date, end_date] whose weekday matches the row's "Day"
+    pattern (e.g. "1357" = Mon/Wed/Fri/Sun)."""
+    require_mod_or_admin(request)
+
+    if not start_date or not end_date or end_date < start_date:
+        raise HTTPException(400, "Khoảng ngày không hợp lệ")
+
+    content = await file.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    except Exception as e:
+        raise HTTPException(400, f"Không đọc được file Excel: {e}")
+
+    # Read first sheet regardless of its name (template has no fixed sheet title requirement)
+    sheet_title = wb.sheetnames[0] if wb.sheetnames else None
+    raw_rows = _read_sheet_indexed(wb, sheet_title) if sheet_title else []
+    if not raw_rows:
+        raise HTTPException(400, "File Excel không có dữ liệu")
+
+    # Registration (tail number) -> aircraft_id lookup
+    aircraft_id_by_reg = {
+        a.registration.upper(): a.id
+        for a in db.query(Aircraft).all()
+        if a.registration
+    }
+
+    # Build the list of dates in range
+    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+    all_dates = []
+    d = start_dt
+    while d <= end_dt:
+        all_dates.append(d)
+        d += timedelta(days=1)
+
+    created = 0
+    skipped = 0
+    errors = []
+
+    for row_num, raw_row in raw_rows:
+        try:
+            row = _map_import_pattern_row(raw_row)
+
+            tail_val   = row.get("tail")
+            from_val   = row.get("from")
+            to_val     = row.get("to")
+            dep_val    = row.get("dep_utc")
+            arr_val    = row.get("arr_utc")
+            fn_val     = row.get("flight_no")
+            day_val    = row.get("day")
+
+            missing = [name for name, v in [
+                ("Tail", tail_val), ("From", from_val), ("To", to_val),
+                ("Dep UTC", dep_val), ("Arr UTC", arr_val), ("Day", day_val),
+            ] if v in (None, "")]
+            if missing:
+                raise ValueError(f"Thiếu dữ liệu bắt buộc: {', '.join(missing)}")
+
+            tail = str(tail_val).upper().strip()
+            ac_id = aircraft_id_by_reg.get(tail)
+            if ac_id is None:
+                raise ValueError(f"Không tìm thấy tàu bay có số đăng bạ '{tail_val}'")
+
+            origin = str(from_val).upper().strip()
+            destination = str(to_val).upper().strip()
+            dep_utc = _norm_time(dep_val)
+            arr_utc = _norm_time(arr_val)
+            if not dep_utc or not arr_utc:
+                raise ValueError("Giờ đi/giờ đến không hợp lệ (định dạng HH:MM)")
+
+            # Parse day-of-week digits (1=Mon...7=Sun), e.g. "1357" -> {1,3,5,7}
+            day_digits = {int(ch) for ch in str(day_val).strip() if ch in "1234567"}
+            if not day_digits:
+                raise ValueError(f"Cột Day không hợp lệ: '{day_val}' (dùng chữ số 1-7, 1=Thứ 2...7=Chủ nhật)")
+
+            flight_number = str(fn_val).strip() if fn_val not in (None, "") else None
+
+            row_created = 0
+            row_skipped = 0
+            for dt in all_dates:
+                if dt.isoweekday() not in day_digits:
+                    continue
+                flight_date = dt.strftime("%Y-%m-%d")
+
+                dup = db.query(FlightSector).filter(
+                    FlightSector.aircraft_id == ac_id,
+                    FlightSector.flight_date == flight_date,
+                    FlightSector.origin == origin,
+                    FlightSector.destination == destination,
+                    FlightSector.dep_utc == dep_utc,
+                ).first()
+                if dup:
+                    row_skipped += 1
+                    continue
+
+                db.add(FlightSector(
+                    aircraft_id=ac_id,
+                    flight_date=flight_date,
+                    origin=origin,
+                    destination=destination,
+                    dep_utc=dep_utc,
+                    arr_utc=arr_utc,
+                    flight_number=flight_number,
+                    status="active",
+                    sequence=0,
+                    service_code="J",
+                ))
+                row_created += 1
+
+            created += row_created
+            skipped += row_skipped
+        except Exception as e:
+            errors.append({"row": row_num, "error": str(e)})
+
+    db.commit()
+
+    return {
+        "ok": True,
+        "created": created,
+        "skipped": skipped,
+        "errors": errors,
+    }
