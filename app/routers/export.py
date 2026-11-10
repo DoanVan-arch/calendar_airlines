@@ -217,43 +217,26 @@ def export_timetable(params: TimetableExportParams, db: Session = Depends(get_db
         r["distance_km"] = distance_map.get(r["route"])
 
     if params.mode == "daily":
-        # Merge identical sectors: group by (aircraft_id, route, dep_utc, arr_utc, flight_number, service_code)
-        merged: dict = defaultdict(lambda: {"dates": [], "dows": set()})
+        # "Daily" mode: one row per actual flight date (no merging across
+        # dates) — each sector already corresponds to exactly one date in
+        # `rows`, so just format that single date and sort.
+        daily_rows = []
         for r in rows:
-            key = (
-                r["aircraft_id"],
-                r["route"],
-                r["dep_utc"],
-                r["arr_utc"],
-                r.get("flight_number") or "",
-                r.get("service_code") or "J",
-            )
-            merged[key]["dates"].append(r["flight_date"])
-            merged[key]["dows"].add(int(r["day_of_week"]))
-            merged[key]["row"] = r  # keep latest row as template
-
-        merged_rows = []
-        for key, grp in merged.items():
-            r = dict(grp["row"])  # clone template row
-            dows_sorted = sorted(grp["dows"])
-            r["day_of_week"] = "".join(str(d) for d in dows_sorted)
-            # "daily" mode must show each flight date explicitly (not compressed
-            # into a date-range string) — e.g. "15JAN26, 16JAN26, 20JAN26"
-            # instead of "15JAN26-16JAN26, 20JAN26".
-            r["date_range"] = format_dates_list(grp["dates"])
-            r["flight_count"] = len(grp["dates"])
-            r["total_seats"] = r["seats"] * r["flight_count"]
-            merged_rows.append(r)
+            r = dict(r)  # clone so we don't mutate the shared row-building dict
+            r["date_range"] = format_dates_list([r["flight_date"]])
+            r["flight_count"] = 1
+            r["total_seats"] = r["seats"]
+            daily_rows.append(r)
 
         # Default sort: aircraft (line_order) → flight_date → displayed dep time → route
-        merged_rows.sort(key=lambda r: (
+        daily_rows.sort(key=lambda r: (
             (aircraft_map[r["aircraft_id"]].line_order if r["aircraft_id"] in aircraft_map else 0),
             r["aircraft_reg"],
-            r.get("date_range", r.get("flight_date", "")),
+            r.get("flight_date", ""),
             r["dep_display"],
             r["route"],
         ))
-        return {"mode": "daily", "timezone": params.timezone, "rows": merged_rows}
+        return {"mode": "daily", "timezone": params.timezone, "rows": daily_rows}
 
     # GROUP mode – group by (origin, destination, dep_display [UTC hour:min key])
     grouped: dict = defaultdict(lambda: {"dates": [], "aircraft": set(), "dows": set(), "total_seats": 0, "min_line_order": 9999})
