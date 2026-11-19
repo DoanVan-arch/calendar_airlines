@@ -765,6 +765,18 @@ async def import_sectors_pattern(
                 raise ValueError(f"Cột Day không hợp lệ: '{day_val}' (dùng chữ số 1-7, 1=Thứ 2...7=Chủ nhật)")
 
             flight_number = str(fn_val).strip() if fn_val not in (None, "") else None
+            # Excel numeric cells may come back as int/float (e.g. 320 or 320.0)
+            # rather than a string — normalize to a plain integer string first
+            # so the digit-only check below works correctly.
+            if isinstance(fn_val, float) and fn_val.is_integer():
+                flight_number = str(int(fn_val))
+            elif isinstance(fn_val, int):
+                flight_number = str(fn_val)
+            # If Flight No. is entered as just digits (e.g. "320"), prefix it
+            # with "VU-" automatically (→ "VU-320"), since that's the airline's
+            # flight number convention and users often omit it when typing fast.
+            if flight_number and flight_number.isdigit():
+                flight_number = f"VU-{flight_number}"
 
             row_created = 0
             row_skipped = 0

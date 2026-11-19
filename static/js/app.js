@@ -4212,6 +4212,10 @@ function createCalendarPicker(container, initialDate, onChange) {
   const MONTH_NAMES = ["Tháng 1","Tháng 2","Tháng 3","Tháng 4","Tháng 5","Tháng 6",
     "Tháng 7","Tháng 8","Tháng 9","Tháng 10","Tháng 11","Tháng 12"];
   const DOW_LABELS = ["CN","T2","T3","T4","T5","T6","T7"];
+  // ISO weekday number per column, aligned to DOW_LABELS order (T2=Monday=1 ... CN=Sunday=7),
+  // matching the day-of-week convention used elsewhere in the app (export.py's
+  // isoweekday(), the paste "Khoảng ngày + Thứ" checkboxes, etc.)
+  const DOW_NUMBERS = [7, 1, 2, 3, 4, 5, 6];
 
   function render() {
     // Header
@@ -4224,6 +4228,7 @@ function createCalendarPicker(container, initialDate, onChange) {
     // Grid
     html += `<div class="cal-picker-grid">`;
     for (const dl of DOW_LABELS) html += `<div class="cal-dow-hdr">${dl}</div>`;
+    for (const dn of DOW_NUMBERS) html += `<div class="cal-dow-num">${dn}</div>`;
 
     // First day of month and fill
     const first = new Date(viewYear, viewMonth, 1);
@@ -4934,11 +4939,11 @@ function openImportPatternModal() {
 
 function downloadImportPatternTemplate() {
   const rows = [
-    ["Tail", "From", "To", "Dep UTC", "Arr UTC", "Flight No.", "Day"],
-    ["VN-A129", "SGN", "HAN", "22:45", "00:55", "VU_EDITED", "1357"],
-    ["VN-A129", "HAN", "SGN", "01:35", "03:45", "VU751", "1357"],
-    ["VN-A129", "SGN", "BKK", "04:50", "06:25", "VU131", "2"],
-    ["VN-A129", "BKK", "SGN", "07:25", "09:15", "VU130", "2"],
+    ["Flight No.", "Tail", "From", "To", "Dep UTC", "Arr UTC", "Day"],
+    ["VU_EDITED", "VN-A129", "SGN", "HAN", "22:45", "00:55", "1357"],
+    ["VU751", "VN-A129", "HAN", "SGN", "01:35", "03:45", "1357"],
+    ["VU131", "VN-A129", "SGN", "BKK", "04:50", "06:25", "2"],
+    ["VU130", "VN-A129", "BKK", "SGN", "07:25", "09:15", "2"],
   ];
   const ws = XLSX.utils.aoa_to_sheet(rows);
   ws["!cols"] = rows[0].map((h, i) => {
