@@ -651,27 +651,43 @@ def get_warnings(
 #   | Flight No. | Day (digits 1-7, Monday=1 ... Sunday=7, e.g. "1357" means
 #   the flight operates on Mon/Wed/Fri/Sun)
 #
+# Also accepts the airline's standard schedule-sheet header names:
+#   FLT (flight no.) | TYPE (service code: J/C/P...) | REG (registration) |
+#   AC (aircraft type, informational only — not used/validated) |
+#   DEP (origin) | ARR (destination) | STD (dep UTC) | STA (arr UTC) |
+#   DOO (day of operation, same digit pattern as "Day")
+#
 # For each row, a FlightSector is created on every date within
 # [start_date, end_date] whose ISO weekday (Monday=1...Sunday=7, matching the
 # convention already used for day_of_week in export.py) matches one of the
-# digits in the row's "Day" column. Existing identical sectors (same
+# digits in the row's "Day"/"DOO" column. Existing identical sectors (same
 # aircraft/date/origin/destination/dep_utc) are skipped to avoid duplicates.
 
 _IMPORT_PATTERN_HEADER_ALIASES = {
     "tail": "tail", "registration": "tail", "tau": "tail", "tàu": "tail", "số đăng bạ": "tail",
+    "reg": "tail",
     "from": "from", "origin": "from", "điểm đi": "from",
+    "dep": "from",
     "to": "to", "destination": "to", "điểm đến": "to",
+    "arr": "to",
     "dep utc": "dep_utc", "dep_utc": "dep_utc", "giờ đi utc": "dep_utc", "gio di utc": "dep_utc",
+    "std": "dep_utc",
     "arr utc": "arr_utc", "arr_utc": "arr_utc", "giờ đến utc": "arr_utc", "gio den utc": "arr_utc",
+    "sta": "arr_utc",
     "flight no.": "flight_no", "flight no": "flight_no", "flight_number": "flight_no",
     "số hiệu": "flight_no", "so hieu": "flight_no",
+    "flt": "flight_no",
     "day": "day", "ngày": "day", "ngay": "day", "day of week": "day", "thứ": "day",
+    "doo": "day",
+    "type": "service_code", "svc": "service_code", "service_code": "service_code",
+    "ac": "ac_type", "aircraft type": "ac_type", "ac_type": "ac_type",
 }
 
 
 def _map_import_pattern_row(raw_row: dict) -> dict:
     """Normalize a raw Excel row dict (arbitrary header text) into the fixed
-    keys: tail, from, to, dep_utc, arr_utc, flight_no, day."""
+    keys: tail, from, to, dep_utc, arr_utc, flight_no, day, service_code,
+    ac_type (ac_type is accepted but purely informational — not used)."""
     mapped = {}
     for header, value in raw_row.items():
         key = _IMPORT_PATTERN_HEADER_ALIASES.get(str(header).strip().lower())
@@ -778,6 +794,14 @@ async def import_sectors_pattern(
             if flight_number and flight_number.isdigit():
                 flight_number = f"VU-{flight_number}"
 
+            # Service code (TYPE column: J=Regular, C=Charter, P=Ferry...).
+            # Optional — defaults to "J" if not provided/recognized.
+            svc_val = row.get("service_code")
+            service_code = str(svc_val).upper().strip() if svc_val not in (None, "") else "J"
+            # "AC" (aircraft type) column is accepted but purely informational —
+            # the aircraft's actual type already comes from its Aircraft record
+            # (resolved via Tail/REG above), so it is intentionally not used here.
+
             row_created = 0
             row_skipped = 0
             for dt in all_dates:
@@ -806,7 +830,7 @@ async def import_sectors_pattern(
                     flight_number=flight_number,
                     status="active",
                     sequence=0,
-                    service_code="J",
+                    service_code=service_code,
                 ))
                 row_created += 1
 

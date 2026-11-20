@@ -4939,11 +4939,10 @@ function openImportPatternModal() {
 
 function downloadImportPatternTemplate() {
   const rows = [
-    ["Flight No.", "Tail", "From", "To", "Dep UTC", "Arr UTC", "Day"],
-    ["VU_EDITED", "VN-A129", "SGN", "HAN", "22:45", "00:55", "1357"],
-    ["VU751", "VN-A129", "HAN", "SGN", "01:35", "03:45", "1357"],
-    ["VU131", "VN-A129", "SGN", "BKK", "04:50", "06:25", "2"],
-    ["VU130", "VN-A129", "BKK", "SGN", "07:25", "09:15", "2"],
+    ["FLT", "TYPE", "REG", "AC", "DEP", "ARR", "STD", "STA", "DOO"],
+    [203,  "J", "VN-A129", "321", "HAN", "DAD", "3:05", "4:30", "1234567"],
+    [8567, "C", "VN-A129", "321", "DAD", "MFM", "5:50", "7:20", "1234567"],
+    [254,  "J", "VN-A129", "321", "SGN", "DAD", "6:20", "7:45", "1234567"],
   ];
   const ws = XLSX.utils.aoa_to_sheet(rows);
   ws["!cols"] = rows[0].map((h, i) => {
